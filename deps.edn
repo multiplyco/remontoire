@@ -1,0 +1,51 @@
+{:paths ["src"]
+
+ ;; Remontoire is loaded as a library into a host JVM and serves MCP over HTTP
+ ;; from inside it — no separate server process, no REPL wire protocol. See
+ ;; doc/design.md §4.
+ ;;
+ ;; The rule is therefore not "no dependencies" but "nothing that can conflict
+ ;; with the host". The HTTP server is com.sun.net.httpserver, which ships in
+ ;; the JDK. data.json is pure Clojure with no transitive deps; jsonista would
+ ;; drag Jackson into a host that already has an opinion about Jackson's
+ ;; version. malli (for `schema`) is resolved dynamically via
+ ;; `requiring-resolve` and never declared, so the library degrades gracefully
+ ;; where it is absent.
+ ;;
+ ;; quiescent is the deliberate exception: the library is built on it rather
+ ;; than merely able to use it — §9 wraps every eval in a task and §10's tracing
+ ;; is a hook in its spawn path — so making it optional would mean maintaining a
+ ;; second, worse execution model for hosts that lack it. It is declared, which
+ ;; means a host carrying its own quiescent resolves one version for both.
+ ;;
+ ;; rewrite-clj and clj-kondo serve only the source-bearing half (§7, §8); a
+ ;; deployment without .clj files on disk needs neither.
+ :deps  {org.clojure/data.json   {:mvn/version "2.5.2"}
+         rewrite-clj/rewrite-clj {:mvn/version "1.2.55"}
+         co.multiply/quiescent   {:mvn/version "0.9.0"}
+         ;; Used directly for scope-carried output attribution (§11), not
+         ;; just transitively through quiescent; keep the version in step
+         ;; with quiescent's own dependency on it.
+         co.multiply/scoped      {:mvn/version "0.1.16"}
+         clj-kondo/clj-kondo     {:mvn/version "2026.05.25"}
+
+         ;; Provided by the consumer.
+         #_#_org.clojure/clojure {:mvn/version "1.12.4"}}
+
+ :aliases
+ {:dev   {:extra-paths ["dev"]
+          :extra-deps  {nrepl/nrepl                              {:mvn/version "1.7.0"}
+                        com.clojure-goes-fast/clj-async-profiler {:mvn/version "2.0.0-beta1"}
+                        criterium/criterium                      {:mvn/version "0.4.6"}}
+          :jvm-opts    ["-Djdk.attach.allowAttachSelf"]}
+
+  :test  {:extra-paths ["test" "test-resources"]
+          :extra-deps  {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+          :main-opts   ["-m" "kaocha.runner"]}
+
+  :build {:ns-default build
+          :deps       {io.github.clojure/tools.build {:mvn/version "0.10.14"}
+                       slipset/deps-deploy           {:mvn/version "0.2.5"}}}
+
+  :cljdoc {:extra-deps {io.github.cljdoc/cljdoc-analyzer {:git/tag "v1.0.873" :git/sha "bf4f620c"}}
+           :main-opts  ["-m" "cljdoc-analyzer.cljdoc-main"]}}}

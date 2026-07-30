@@ -1,0 +1,7 @@
+#kaocha/v1
+{:tests           [{:id :unit :test-paths ["test"]}]
+ :randomize?      false
+ ;; The suite installs the real root tees (tee/install!) exactly as a live
+ ;; host does; kaocha's capture plugin would swap the root *out* per test
+ ;; and displace them.
+ :capture-output? false}
