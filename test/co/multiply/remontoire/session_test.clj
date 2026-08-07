@@ -13,7 +13,7 @@
   (is (= 'co.multiply.remontoire.scratch (session/scratch-ns-sym nil))
     "the sessionless in-process caller keeps the shared scratch")
   (is (not= (session/scratch-ns-sym "abc-123-xyz")
-        (session/scratch-ns-sym "def-456-uvw")))
+            (session/scratch-ns-sym "def-456-uvw")))
   ;; an adopted sid is client-chosen text; whatever it holds, the scratch
   ;; name must be a namespace-legal symbol
   (doseq [sid ["!!!///:::" "we ird" ""]]

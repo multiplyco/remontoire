@@ -4,15 +4,15 @@
    Takes a parsed request map, returns a response map. No I/O and no transport
    concerns — which is what makes it testable without a socket."
   (:require [clojure.string :as str]
-            [co.multiply.quiescent :as q]
-            [co.multiply.remontoire.evaluate :as evaluate]
-            [co.multiply.remontoire.exception :as exception]
+    [co.multiply.quiescent :as q]
+    [co.multiply.remontoire.evaluate :as evaluate]
+    [co.multiply.remontoire.exception :as exception]
     ;; Not called from anywhere: loaded so the pattern namespaces exist
     ;; for the drilldown — `(__r/nses "patterns")` is their index.
-            [co.multiply.remontoire.patterns]
-            [co.multiply.remontoire.registry :as registry]
-            [co.multiply.remontoire.session :as session]
-            [co.multiply.remontoire.tee :as tee]))
+    [co.multiply.remontoire.patterns]
+    [co.multiply.remontoire.registry :as registry]
+    [co.multiply.remontoire.session :as session]
+    [co.multiply.remontoire.tee :as tee]))
 
 
 (def ^:private server-info
@@ -203,7 +203,7 @@
                                     ;; (smoke test, 2026-08-06); the session's
                                     ;; actual place is the truthful default.
                                     :ns      (if (and (seq ns)
-                                                  (find-ns (symbol ns)))
+                                                   (find-ns (symbol ns)))
                                                ns
                                                (evaluate/current-ns session))
                                     :settled settled

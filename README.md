@@ -26,7 +26,7 @@ Three MCP tools, and a library of ordinary Clojure functions called through the 
 - **`await`** — wait for ids to settle, with a mandatory deadline.
 - **`cancel`** — cancel ids, cooperatively, and report where each stands.
 
-Inside evals, the toolkit is the `__r` namespace, aliased everywhere the agent goes: `nses`, `outline`, `doc`,
+Inside evals, the toolkit is the `__r` namespace, aliased everywhere the agent goes: `nses`, `vars`, `outline`, `doc`,
 `source` and `file` for navigation; `res`, `evals`, `out` and `failure` for the registry; `sessions`, `introduce!`
 and `release!` for sharing the JVM with other connected sessions. Results you haven't read are never evicted; everything
 else lives in a bounded least-recently-used pool, and eviction is always announced, never silent.

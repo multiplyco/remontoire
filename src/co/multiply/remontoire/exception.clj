@@ -12,7 +12,7 @@
    a profile is data, so the registry can store it and answer questions about
    it later, which a string could not."
   (:require [clojure.repl :as repl]
-            [clojure.string :as str]))
+    [clojure.string :as str]))
 
 
 (def ^:private scaffolding

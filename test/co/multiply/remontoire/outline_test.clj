@@ -1,7 +1,8 @@
 (ns co.multiply.remontoire.outline-test
-  "Navigation reads the running system: `nses` → `outline` → `file`, with
-   the composability invariant — every result element is a valid input to
-   the other functions — exercised on a specimen namespace."
+  "Navigation reads the running system: `nses`/`vars` → `outline` →
+   `file`, with the composability invariant — every result element
+   is a valid input to the other functions — exercised on a
+   specimen namespace."
   (:require
     [clojure.string :as str]
     [clojure.test :refer [deftest is]]
@@ -16,12 +17,39 @@
     (is (= all (vec (sort all))) "sorted")
     (is (some #{'clojure.core} all)))
   (is (= ['co.multiply.remontoire.fixture]
-        (outline/nses 'co.multiply.remontoire.fixture))
+         (outline/nses 'co.multiply.remontoire.fixture))
     "a symbol answers whether a namespace is loaded")
   (is (= [] (outline/nses 'no.such.loaded.ns)))
   (let [hits (outline/nses "REMONTOIRE")]
     (is (seq hits) "string match is case-insensitive")
     (is (every? #(str/includes? (str %) "remontoire") hits))))
+
+
+(deftest vars-searches-the-whole-loaded-system
+  (let [hits (outline/vars "frobnitz")]
+    (is (= '[co.multiply.remontoire.fixture] (mapv :ns hits))
+      "a docstring hit carries the namespace that answers where it lives")
+    (is (= 'public-fn (:name (first hits))))
+    (is (seq (:matched (first hits))) "and quotes its evidence"))
+  (is (= (outline/vars "public-macro") (outline/vars 'public-macro))
+    "a symbol is matched as its name")
+  (let [hits (outline/vars #"^poly$")]
+    (is (some #(= [:a :b] (:dispatches %)) hits)
+      "hits are outline entries, multimethod dispatches included"))
+  (let [hits (outline/vars "private-fn")]
+    (is (some #(and (= 'co.multiply.remontoire.fixture (:ns %)) (:private %)) hits)
+      "privates are searched and marked"))
+  (let [hits (outline/vars "outline")]
+    (is (< 1 (count (distinct (map :ns hits)))) "the search spans namespaces"))
+  (is (= 'vars (:name (first (outline/vars 'vars))))
+    "an exact name hit outranks names that merely contain the match")
+  (let [fx (filterv #(= 'co.multiply.remontoire.fixture (:ns %))
+             (outline/vars "private"))]
+    (is (= '[private-fn hidden] (mapv :name fx))
+      "a name hit outranks a docstring hit, whatever the source order"))
+  (is (= [] (outline/vars "no-var-answers-to-this-name")))
+  (is (thrown? Exception (outline/vars nil))
+    "a match is required — the whole var population is no glance"))
 
 
 (deftest outline-is-the-namespace-at-a-glance
@@ -30,7 +58,7 @@
     (is (= 'co.multiply.remontoire.fixture (:ns o)))
     (is (string? (:doc o)))
     (is (= '[plain-value hidden *knob* public-fn private-fn public-macro poly]
-          (mapv :name (:vars o)))
+           (mapv :name (:vars o)))
       "source order, privates included")
     (is (true? (:private (by-name 'hidden))))
     (is (true? (:macro (by-name 'public-macro))))
@@ -56,9 +84,9 @@
 
 (deftest designators-compose
   (is (= 'co.multiply.remontoire.fixture
-        (:ns (outline/outline "co.multiply.remontoire.fixture"))))
+         (:ns (outline/outline "co.multiply.remontoire.fixture"))))
   (is (= 'co.multiply.remontoire.fixture
-        (:ns (outline/outline (the-ns 'co.multiply.remontoire.fixture)))))
+         (:ns (outline/outline (the-ns 'co.multiply.remontoire.fixture)))))
   (binding [*ns* (the-ns 'co.multiply.remontoire.outline-test)]
     (is (= 'co.multiply.remontoire.fixture (:ns (outline/outline 'fix)))
       "an alias visible from the calling namespace designates"))

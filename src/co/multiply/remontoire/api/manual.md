@@ -1,7 +1,9 @@
 Your toolkit is the `__r` namespace, aliased into every namespace your evals touch; the outline this call returns —
 every function, signatures and docstrings, as data — is its reference. The system is read by drilling down:
 `(__r/nses)` lists the loaded namespaces, `(__r/outline 'some.ns)` reads one — signatures at a glance, docstrings and
-search via its options — `doc` and `source` read single vars, and `file` reads a whole source file. Recipes for the
+search via its options — `doc` and `source` read single vars, and `file` reads a whole source file. When the namespace
+is the unknown — where does that function live? — `(__r/vars "name")` searches every loaded var by name and docstring.
+Recipes for the
 common async shapes — cleanup, deadlines, partial results, integrations, work that outlives its eval, bounded fan-out,
 repeating work — are loaded pattern namespaces: `(__r/nses "patterns")` is the index, `outline` and `file` read them.
 Quiescent itself is a namespace like any other: `(__r/outline 'co.multiply.quiescent {:match "gate"})` answers what

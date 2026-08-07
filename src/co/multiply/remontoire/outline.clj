@@ -128,6 +128,38 @@
          hit (filter #(hit (str %))))))))
 
 
+(defn vars
+  "Every loaded var whose name or docstring matches, across all
+   namespaces — the entry point for \"where does that function live?\",
+   where `nses` searches namespace names and `outline` reads one
+   namespace at a time. Hits are outline entries with `:ns` attached,
+   scored: vars named exactly `match` first, then name hits, then
+   docstring-only hits — the definition asked for outranks a mention of
+   it — and namespace-then-source-line order within each tier. Docstring
+   hits quote their matching lines as `:matched`, the same evidence
+   `outline` shows. `match` is required — the JVM's whole var population
+   is no glance — and takes what `nses` takes: a string
+   (case-insensitive substring), a regex, or a symbol matched as its
+   name."
+  [match]
+  (let [m     (if (symbol? match) (str match) match)
+        hit   (or (matcher m)
+                (throw (ex-info "vars searches: match with a string, a regex or a symbol"
+                         {:match match})))
+        exact (if (string? m)
+                #(String/.equalsIgnoreCase m %)
+                #(boolean (re-matches m %)))
+        tier  (fn [e]
+                (let [n (str (:name e))]
+                  (cond (exact n) 0 (hit n) 1 :else 2)))]
+    (->> (all-ns)
+      (mapcat (fn [ns]
+                (map #(into {:ns (ns-name ns)} %)
+                  (keep #(entry % false hit) (vals (ns-interns ns))))))
+      (sort-by (fn [e] [(tier e) (:ns e) (or (:line e) Long/MAX_VALUE)]))
+      (into []))))
+
+
 (defn outline
   "The outline of the namespace `ns` designates: `{:ns sym :doc gist
    :vars [entry …]}`, entries in source order, privates included and

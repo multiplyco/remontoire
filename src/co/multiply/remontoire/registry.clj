@@ -11,8 +11,8 @@
    evaporate on reload would break the property the registry exists for —
    that an id keeps resolving."
   (:require [co.multiply.quiescent :as q]
-            [co.multiply.remontoire.session :as session]
-            [co.multiply.scoped :as sc]))
+    [co.multiply.remontoire.session :as session]
+    [co.multiply.scoped :as sc]))
 
 
 (def default-capacity

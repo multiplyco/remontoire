@@ -48,10 +48,10 @@
   ;; The second form's task completes before the third form runs — an eval
   ;; is an implicit qdo, not three racing forms.
   (is (= [:first :second]
-        (:value (run!! (str "(def a (atom [])) "
-                         "(__q/task (Thread/sleep 40) (swap! a conj :first)) "
-                         "(swap! a conj :second)")
-                  (session/mint!))))))
+         (:value (run!! (str "(def a (atom [])) "
+                          "(__q/task (Thread/sleep 40) (swap! a conj :first)) "
+                          "(swap! a conj :second)")
+                   (session/mint!))))))
 
 
 (deftest orphans-die-with-the-eval-compelled-work-does-not
@@ -102,7 +102,7 @@
         {:keys [error]} (run!! "1" "no.such.ns" sid)]
     (is (some? error))
     (is (= 'no.such.ns
-          (:ns (some ex-data (take-while some? (iterate ex-cause error))))))
+           (:ns (some ex-data (take-while some? (iterate ex-cause error))))))
     (is (nil? (session/current-ns sid))
       "the namespace was never entered — the session has not moved")))
 
@@ -122,7 +122,7 @@
     (try
       (run!! "(ns remontoire.test.visited)" sid)
       (is (= 'co.multiply.remontoire.api
-            (:value (run!! "(:ns (__r/outline '__r))" "remontoire.test.visited" sid)))
+             (:value (run!! "(:ns (__r/outline '__r))" "remontoire.test.visited" sid)))
         "__r resolves, and outline accepts it as an alias designator")
       (finally (remove-ns 'remontoire.test.visited)))))
 

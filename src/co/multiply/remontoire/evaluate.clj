@@ -4,13 +4,13 @@
    The namespace a caller was last in is conversational state, so it lives
    with the caller's session (§11) rather than here."
   (:require [co.multiply.quiescent :as q]
-            [co.multiply.remontoire.api]
-            [co.multiply.remontoire.exception :as exception]
-            [co.multiply.remontoire.session :as session]
-            [co.multiply.remontoire.tee :as tee]
-            [co.multiply.scoped :as sc])
+    [co.multiply.remontoire.api]
+    [co.multiply.remontoire.exception :as exception]
+    [co.multiply.remontoire.session :as session]
+    [co.multiply.remontoire.tee :as tee]
+    [co.multiply.scoped :as sc])
   (:import [clojure.lang LineNumberingPushbackReader]
-           [java.io StringReader]))
+    [java.io StringReader]))
 
 
 (defn- ensure-scratch!

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `__r/vars` — global var search, the top-ranked wish from the first in-situ smoke test: every loaded var whose name
+  or docstring matches, as outline entries with `:ns` attached — scored, so vars named exactly what you asked for
+  lead, then name hits, then docstring-only mentions, in namespace and source order within each tier; docstring hits
+  quote their matching lines as `:matched`. Takes what `nses` takes — a string (case-insensitive substring), a regex,
+  or a symbol matched as its name — so "where does that function live?" no longer takes guessing namespaces.
+
 ## 0.1.2 - 2026-08-06
 
 - `GET /probe` — a sessionless identity endpoint beside `/mcp`, for discovery tooling, health checks and post-deploy

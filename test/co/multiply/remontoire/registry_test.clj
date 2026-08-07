@@ -3,7 +3,7 @@
    evicted, delivered entries go least-recently-touched first, eviction is
    announced, and release is punctuation with an audit."
   (:require
-    [clojure.test :refer [deftest is testing use-fixtures]]
+    [clojure.test :refer [deftest is use-fixtures]]
     [co.multiply.quiescent :as q :refer [q]]
     [co.multiply.remontoire.registry :as registry]
     [co.multiply.remontoire.session :as session]
@@ -82,7 +82,7 @@
     (registry/capacity! 3)
     (let [[a b c] [(admit! sid :a) (admit! sid :b) (admit! sid :c)]]
       (run! registry/res [a b c])
-      (registry/res a)                             ; refresh: order is now b c a
+      (registry/res a)                                      ; refresh: order is now b c a
       (registry/res (admit! sid :d))
       (let [{evicted :evicted} (capture!* sid (q :e))]
         (is (= [b] evicted)
@@ -154,7 +154,7 @@
   (let [sid (session/mint!)
         a   (admit! sid :a)]
     (swap! @#'session/state assoc-in [sid :last-seen] 0)
-    (admit! (session/mint!) :other)                ; admission reaps the dead
+    (admit! (session/mint!) :other)                         ; admission reaps the dead
     (is (not-any? #(= sid (:sid %)) (session/roster)))
     (is (= :a @(registry/res a))
       "death degrades — the entry stays res-able until pressure claims it")))

@@ -54,7 +54,7 @@
   (let [sid  (session/mint!)
         resp (tu/rpc! sid {:jsonrpc "2.0" :id 1 :method "tools/list"})]
     (is (= #{"eval" "await" "cancel"}
-          (into #{} (map :name) (get-in resp [:result :tools]))))
+           (into #{} (map :name) (get-in resp [:result :tools]))))
     (is (every? :inputSchema (get-in resp [:result :tools])))
     (is (false? (mcp/tools-changed? sid))
       "the fetch marker advances when the list is actually served")))
@@ -167,7 +167,7 @@
   (let [sid (session/mint!)]
     (tu/call! sid "eval" {:code "(__r/introduce! \"running the test suite\")"})
     (is (= "running the test suite"
-          (:note (first (filter #(= sid (:sid %)) (session/roster))))))
+           (:note (first (filter #(= sid (:sid %)) (session/roster))))))
     (is (str/starts-with?
           (tu/text-of (tu/call! sid "eval"
                         {:code "(:you (first (filter :you (__r/sessions))))"}))

@@ -173,6 +173,26 @@
   ([match] (outline/nses match)))
 
 
+(defn vars
+  "Global var search — \"where does that function live?\" answered without
+   guessing namespaces: every loaded var whose name or docstring matches,
+   as outline entries with `:ns` attached. Scored — vars named exactly
+   `match` first, then name hits, then docstring-only hits, in namespace
+   and source order within each tier — so the definition asked for leads
+   and the mentions follow. `match` is a string (case-insensitive
+   substring), a
+   regex, or a symbol matched as its name; docstring hits quote their
+   matching lines as `:matched` — the answer shows its evidence. The
+   whole loaded system is searched, clojure.core and dependencies
+   included, so a broad term returns plenty — narrow it, or filter the
+   hits by `:ns`: they are plain data, made for composing, and each one
+   says where `outline`, `doc` and `source` should look next. Loaded
+   namespaces only, like `nses`: what has never been required has no
+   vars to search."
+  [match]
+  (outline/vars match))
+
+
 (defn file
   "The source file of a namespace, verbatim, as a string — comments and
    `(comment …)` blocks included: the whole of what is *written*, where

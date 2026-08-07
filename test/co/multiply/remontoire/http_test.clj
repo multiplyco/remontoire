@@ -39,10 +39,10 @@
   ^HttpRequest [body {:keys [sid accept origin method]}]
   (let [builder (HttpRequest/newBuilder (URI/create *url*))]
     (case (or method :post)
-      :post   (-> builder
-                (.header "Content-Type" "application/json")
-                (.POST (HttpRequest$BodyPublishers/ofString (json/write-str body))))
-      :get    (.GET builder)
+      :post (-> builder
+              (.header "Content-Type" "application/json")
+              (.POST (HttpRequest$BodyPublishers/ofString (json/write-str body))))
+      :get (.GET builder)
       :delete (.method builder "DELETE" (HttpRequest$BodyPublishers/noBody)))
     (when sid (.header builder "Mcp-Session-Id" sid))
     (when accept (.header builder "Accept" accept))
