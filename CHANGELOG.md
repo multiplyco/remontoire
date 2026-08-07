@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 - 2026-08-07
 
 - `__r/vars` — global var search, the top-ranked wish from the first in-situ smoke test: every loaded var whose name
   or docstring matches, as outline entries with `:ns` attached — scored, so vars named exactly what you asked for

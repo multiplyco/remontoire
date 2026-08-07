@@ -47,7 +47,7 @@ resolves a single version for both.
 Add it from [Clojars](https://clojars.org/co.multiply/remontoire):
 
 ```clojure
-co.multiply/remontoire {:mvn/version "0.1.2"}
+co.multiply/remontoire {:mvn/version "0.1.3"}
 ```
 
 ## Starting the endpoint
@@ -81,7 +81,7 @@ and post-deploy sanity. Plain JSON, no session minted, no state touched:
 
 ```
 $ curl http://127.0.0.1:7888/probe
-{"server":"remontoire","version":"0.1.2","describe":"the production system behind multiply.co"}
+{"server":"remontoire","version":"0.1.3","describe":"the production system behind multiply.co"}
 ```
 
 `server` is the fixed discriminator to key on; `describe` is the `init!`-time self-description, `null` when unset.
