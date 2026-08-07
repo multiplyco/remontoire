@@ -63,3 +63,10 @@ fluent-platform's classpath. Resolve it dynamically; don't take the dependency.
 `…`-truncated data.** Truncated data shows neither structure nor content; shape plus a handle shows the structure *and*
 tells the caller what to filter on.
 
+Interim, built 2026-08-07 (wishlist item 3 from the first in-situ smoke test): until `shape` replaces the dumb cap, the
+cap announces itself — the response footer counts what the caps hid (`;; truncated — 9872 elided · (res 8) is the
+whole value`) via a mirror of the printer's own walk: counted collections answer exactly and for free, an uncounted seq is
+probed one already-realized cell past the cap, a subtree below `*print-level*` is reported hidden rather than sized —
+so the mirror can neither block nor force anything the printer didn't. Deliberately a footer annotation, not an inline
+`... n more` rendering: inline requires a custom printer, which is exactly the machinery `shape` retires this cap with.
+

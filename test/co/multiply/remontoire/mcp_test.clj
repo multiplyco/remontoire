@@ -77,6 +77,32 @@
     (is (str/includes? (tu/text-of resp) "marco"))))
 
 
+(deftest truncation-announces-its-size
+  (let [sid (session/mint!)]
+    (let [text (tu/text-of (tu/call! sid "eval" {:code "(vec (range 10000))"}))]
+      (is (str/includes? text "truncated")
+        "a cut rendering announces itself")
+      (is (str/includes? text "9872")
+        "and a counted collection says exactly how much was elided"))
+    (is (str/includes?
+          (tu/text-of (tu/call! sid "eval" {:code "{:a (vec (range 200))}"}))
+          "72")
+      "nested cuts count too")
+    (is (str/includes?
+          (tu/text-of (tu/call! sid "eval" {:code "(take 200 (range))"}))
+          "truncated")
+      "an uncounted seq announces the cut even without a total")
+    (is (str/includes?
+          (tu/text-of (tu/call! sid "eval"
+                        {:code "(reduce (fn [a _] (vector a)) :x (range 20))"}))
+          "truncated")
+      "so does a subtree hidden below the print depth")
+    (is (not (str/includes?
+               (tu/text-of (tu/call! sid "eval" {:code "(vec (range 5))"}))
+               "truncated"))
+      "an uncut value says nothing")))
+
+
 (deftest failure-is-a-result-not-a-protocol-error
   (let [resp (tu/call! (session/mint!) "eval"
                {:code "(throw (ex-info \"boom\" {:k 1}))"})]

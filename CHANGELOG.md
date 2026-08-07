@@ -7,6 +7,9 @@
   lead, then name hits, then docstring-only mentions, in namespace and source order within each tier; docstring hits
   quote their matching lines as `:matched`. Takes what `nses` takes — a string (case-insensitive substring), a regex,
   or a symbol matched as its name — so "where does that function live?" no longer takes guessing namespaces.
+- Truncation announces its size: when the value renderer's caps cut a result, the response footer says how much was
+  elided — exactly for counted collections (`;; truncated — 9872 elided`), a floor when a lazy tail keeps the total
+  unknowable — and points at `(res id)` for the whole value. Same doctrine as eviction: announced, never silent.
 
 ## 0.1.2 - 2026-08-06
 

@@ -293,3 +293,17 @@ question answering itself badly. Scoring added: three tiers — exact name match
 namespace-then-source-line within each; the shape stays one flat vector, the ordering carrying the ranking.
 Verified live: `(vars 'status)` now leads with the two exact-named defns before any mention. Suite green:
 71 tests, 252 assertions.
+
+## 2026-08-07 — Truncation announces its size
+
+**Built (2026-08-07) — item (3) from the in-situ wishlist, the interim form.** The value renderer's caps stay as they
+are; what changed is the silence: a cut rendering now carries a footer line — `;; truncated — 9872 elided ·
+(res 8) is the whole value` — produced by a mirror of the printer's own walk (counted collections counted exactly for
+free, an uncounted seq probed one already-realized cell past the cap, below-`*print-level*` subtrees reported hidden,
+not sized). The inline `... n more` rendering the wishlist sketched was considered and declined: it needs a custom
+bounded printer, which is precisely the machinery §6's `shape` will retire the cap with — the footer line joins the
+eviction announcement instead, same doctrine, and nothing gets thrown away when `shape` lands. Verified live through
+the MCP connection: `(vec (range 10000))` → "9872 elided" (the wishlist's own example number), `(take 200 (range))`
+→ "uncounted elision" with `(count @(__r/res 9))` → 200 behind it. One trap re-confirmed while testing: an eval
+returning an *infinite* seq never settles — deep grounding walks the return value — so the infinite case cannot
+reach the renderer at all; the honest uncounted case is a finite lazy seq. Suite green: 72 tests, 258 assertions.

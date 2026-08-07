@@ -107,14 +107,44 @@
     (contains? before request-id)))
 
 
+(def ^:private value-length 128)
+(def ^:private value-level 12)
+
+
 (defn- render-value
   "Value first, because that is what was asked for. Bounded, because `pr-str`
-   of an infinite seq never returns; Clojure prints `...` at each cut, so the
-   truncation announces itself. This is §4's dumb cap — `shape` replaces it."
+   of an infinite seq never returns; Clojure prints `...` at each cut, and
+   the footer counts what the cuts hid (`elision`). This is §4's dumb cap —
+   `shape` replaces it."
   [value]
-  (binding [*print-length* 128
-            *print-level*  12]
+  (binding [*print-length* value-length
+            *print-level*  value-level]
     (pr-str value)))
+
+
+(defn- elision
+  "What `render-value`'s caps hid of `x`: `[elided exact?]`, nil when
+   nothing was cut. Mirrors the printer's own walk one step behind it —
+   counted collections answer exactly and for free, an uncounted seq is
+   probed one cell past the cap, a collection below `*print-level*` is
+   reported hidden rather than sized. Call it after rendering: the one
+   probed cell is a cell the printer already realized, so the mirror
+   realizes nothing new and can neither block nor force."
+  [x depth]
+  (when (coll? x)
+    (if (> depth value-level)
+      [0 false]
+      (let [n     (when (counted? x) (count x))
+            xs    (seq x)
+            shown (take value-length xs)
+            over  (if n
+                    (when (> n value-length) [(- n value-length) true])
+                    (when (seq (drop value-length xs)) [0 false]))
+            below (keep #(elision % (inc depth))
+                    (if (map? x) (mapcat identity shown) shown))]
+        (when (or over (seq below))
+          (reduce (fn [[e exact] [e2 exact2]] [(+ e e2) (and exact exact2)])
+            (or over [0 true]) below))))))
 
 
 (defn- news
@@ -139,14 +169,24 @@
    is visible. The form count appears only when more than one ran; evals
    that settled unseen since the last response are reported here — id and
    status, the value is a `res` away — and eviction is announced, never
-   silent. A session that has not read the manual is told so, once per
+   silent. So is truncation: a rendering the caps cut says how much was
+   elided — exactly when the collections are counted, a floor when a lazy
+   tail keeps the total unknowable — and that the entry holds the whole
+   value. A session that has not read the manual is told so, once per
    response (§4): a fact, not an error — a model that read it on another
    server of the same build may judge for itself."
-  [{:keys [id note ns forms settled evicted nudge]}]
+  [{:keys [id note ns forms truncated settled evicted nudge]}]
   (str ";; id " id
     (when note (str " · " note))
     " · ns " ns
     (when (and forms (> forms 1)) (str ", " forms " forms"))
+    (when-let [[n exact] truncated]
+      (str "\n;; truncated — "
+        (cond
+          exact    (str n " elided")
+          (pos? n) (str "at least " n " elided")
+          :else    "uncounted elision")
+        " · (res " id ") is the whole value"))
     (when (seq settled) (str "\n" (news-line settled)))
     (when (seq evicted)
       ;; "id 1", not bare "1" — a lone number reads as a count (a fresh
@@ -243,9 +283,15 @@
             ;; Settled non-exceptionally ⇒ evaluate returned ⇒ details was
             ;; delivered before the task settled — and its :ns is where this
             ;; eval itself landed, where `current-ns` is whoever moved last.
-            (let [{:keys [ns forms]} @details]
-              {:text (str (render-value @task)
-                       "\n" out (line {:ns ns :forms forms}))}))
+            (let [{:keys [ns forms]} @details
+                  value    @task
+                  ;; Render before mirroring: the printer realizes the
+                  ;; cells, the mirror only revisits them.
+                  rendered (render-value value)]
+              {:text (str rendered
+                       "\n" out (line {:ns        ns
+                                       :forms     forms
+                                       :truncated (elision value 1)}))}))
         (assoc ::delivered mark!)))))
 
 
@@ -509,7 +555,7 @@
     "state of the actual system"
     (when-let [d (:describe @config)] (str " (here: " d ")"))
     " — not a sandbox. Prefer it for navigating and reading Clojure — "
-    "namespaces, signatures, docstrings, source, live data — where it is "
+    "namespaces, signatures, var lookups, docstrings, source, live data — where it is "
     "faster and more precise than file search, as well as for evaluating "
     "code. Its async semantics will silently surprise you: before your "
     "first eval, run `(__r/manual)`, unless you've already read it in this "
