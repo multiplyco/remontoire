@@ -11,11 +11,38 @@
   (let [b (tee/bank)]
     (tee/deposit! b (apply str (repeat 40000 "x")))
     (tee/deposit! b "the-tail-end")
-    (let [{:keys [s total]} @b]
-      (is (= 40012 total))
-      (is (< (count s) total) "the bank is bounded")
-      (is (str/ends-with? s "the-tail-end") "the newest output survives"))
-    (is (str/includes? (tee/text b) "dropped") "the trim is announced, never silent")))
+    (is (= 40012 (:total @b)))
+    (let [s (tee/text b)]
+      (is (< (count s) 40012) "the bank is bounded")
+      (is (str/ends-with? s "the-tail-end") "the newest output survives")
+      (is (str/includes? s "dropped") "the trim is announced, never silent"))))
+
+
+(deftest trimming-drops-whole-lines
+  (let [b (tee/bank)]
+    (dotimes [i 500]
+      (tee/deposit! b (str "line-" (format "%03d" i) " "
+                        (apply str (repeat 90 "=")) "\n")))
+    (let [s (tee/text b)]
+      (is (str/includes? s "dropped"))
+      (is (re-find #"dropped\]\nline-\d" s)
+        "the retained window begins at a line boundary, never mid-entry")
+      (is (str/ends-with? s "\n")))))
+
+
+(deftest tail-is-a-window-not-a-consumption
+  (let [b (tee/bank)]
+    (dotimes [i 10] (tee/deposit! b (str "l" i "\n")))
+    (tee/deposit! b "pending")
+    (let [t (tee/tail b 3)]
+      (is (str/includes? t "l9"))
+      (is (str/includes? t "pending")
+        "the unterminated line is the newest entry")
+      (is (not (str/includes? t "l5")))
+      (is (str/includes? t "more lines")
+        "what lies behind the window is announced"))
+    (is (str/includes? (tee/text b) "l0")
+      "a tail read consumed nothing — the full text still starts at the top")))
 
 
 (deftest text-is-the-whole-truth-under-the-cap

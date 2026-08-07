@@ -13,6 +13,10 @@
 - The manual and the eval description name the infinite-lazy-return trap: grounding walks each form's whole value, so
   a returned infinite seq never settles. Infinite seqs are fine to work with — `(def nat-ints (range))` returns the
   var, `(take 5 nat-ints)` a bounded value; it is only the returned value that cannot be unbounded.
+- `(__r/out id n)` — the output tail: the last `n` printed lines, the pending unterminated line included, with
+  whatever lies behind the window announced. A view, not a consumption — the full `(__r/out id)` is unchanged by it.
+  Underneath, output banks now retain completed lines rather than one string, so the cap trims whole entries,
+  oldest first, and a chatty eval no longer pays a full-bank copy per write.
 
 ## 0.1.2 - 2026-08-06
 

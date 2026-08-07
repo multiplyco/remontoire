@@ -86,4 +86,6 @@
   (init! {:describe "A Remontoire REPL to the Remontoire project itself"})
   (stop!)
 
+  (co.multiply.remontoire.api/out 1)
+
   :-)

@@ -71,7 +71,13 @@ output arrives with the response, under `;; out`.
 global installation, per-write discrimination: every write passes through to the original writer unchanged, and a
 write whose thread carries a bank is additionally copied into it, over §11's two rails (`scoping` around chain
 construction for the whole task tree, a per-link `binding` for Clojure conveyance, one `sc/ask` covering both).
-Banks are per-entry, capped at 32 KiB keeping the tail with the drop announced. Every response branch carries
+Banks are per-entry, capped at 32 KiB keeping the tail with the drop announced. Restructured 2026-08-07 (wishlist
+item 6): a bank stores completed lines plus the pending unterminated partial, not one string — the line is the unit
+of retention, so trimming drops whole entries oldest-first (string surgery survives only at the one edge where a
+single line outgrows the whole cap), `deposit!` stopped re-copying the retained 32 KiB per write, and `(__r/out id n)`
+windows the last `n` entries with what lies behind announced — a view over the same bank, taking nothing from a later
+full `(__r/out id)`. The `since` cursor (the heartbeat's read) kept its character-count contract unchanged through
+the restructure. Every response branch carries
 `;; out` — value first (§4), then output, then footer — because a running or failed eval's output is often the most
 informative thing about it; `(__r/out id)` reads a bank mid-run without delivering, via the non-touching
 `registry/entry` accessor (§5). Verified through the live connection: top-level, nested-task and `future` prints

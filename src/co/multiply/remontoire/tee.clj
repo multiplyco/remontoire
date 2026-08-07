@@ -17,8 +17,11 @@
    2026-08-05, invisible then), reflection notes, stack traces from
    stray threads, anything host code mutters."
   (:require
+    [clojure.string :as str]
     [co.multiply.scoped :as sc])
-  (:import [java.io Writer]))
+  (:import
+    [clojure.lang PersistentQueue]
+    [java.io Writer]))
 
 
 (def ^:dynamic *bank*
@@ -40,23 +43,47 @@
 
 
 (defn bank
-  "A fresh bank: the tail of what one eval printed, plus how much has ever
-   arrived, so trimming stays announceable."
+  "A fresh bank: the tail of what one eval printed — completed lines in
+   arrival order, each stored with its newline, plus the unterminated
+   `:partial` — and how much has ever arrived, so trimming stays
+   announceable. Lines, because whole entries are the unit a reader
+   wants retained or dropped, and windowing (`tail`) falls out of the
+   structure instead of out of string surgery."
   []
-  (atom {:s "" :total 0}))
+  (atom {:lines PersistentQueue/EMPTY :chars 0 :partial "" :total 0}))
 
 
 (defn deposit!
-  "Append `s` to `bank`, trimming to the cap from the front."
+  "Append `s` to `bank`. Writes assemble into newline-terminated lines —
+   the unit of retention — and the cap trims whole lines from the front,
+   oldest first; only a partial that alone outgrows the cap is cut
+   mid-line, string surgery kept to that one edge."
   [bank ^String s]
   (swap! bank
-    (fn [{:keys [s total] :as state} added]
-      (let [s' (str s added)
-            n  (count s')]
-        {:s     (if (> n bank-cap) (subs s' (- n bank-cap)) s')
-         :total (+ total (count added))}))
+    (fn [{:keys [lines chars partial total]} ^String added]
+      (let [s      (str partial added)
+            pieces (str/split s #"(?<=\n)")
+            whole? (str/ends-with? s "\n")
+            done   (if whole? pieces (pop pieces))
+            part   (if whole? "" (peek pieces))
+            part'  (let [n (count part)]
+                     (if (> n bank-cap) (subs part (- n bank-cap)) part))
+            [q c]  (loop [q (into lines done)
+                          c (transduce (map count) + chars done)]
+                     (if (and (> (+ c (count part')) bank-cap) (seq q))
+                       (recur (pop q) (- c (count (peek q))))
+                       [q c]))]
+        {:lines q :chars c :partial part' :total (+ total (count added))}))
     s)
   nil)
+
+
+(defn- retained
+  "The bank's whole retained text, verbatim — lines then partial."
+  ^String [{:keys [lines partial]}]
+  (let [sb (StringBuilder.)]
+    (doseq [^String l lines] (.append sb l))
+    (-> sb (.append ^String partial) .toString)))
 
 
 (defn text
@@ -64,10 +91,34 @@
    a tail that silently posed as the whole output would be §5's nasty
    failure mode wearing a different hat."
   [bank]
-  (let [{:keys [s total]} @bank]
+  (let [{:keys [total] :as state} @bank
+        s (retained state)]
     (if (> total (count s))
       (str "…[" (- total (count s)) " chars dropped]\n" s)
       s)))
+
+
+(defn tail
+  "The last `n` entries `bank` retains — completed lines, plus the
+   pending unterminated line when there is one — with whatever lies
+   behind the window announced: retained lines out of view, and chars
+   the cap already dropped. A view, not a consumption: the bank keeps
+   what it keeps however it is read."
+  [bank n]
+  (let [{:keys [total] :as state} @bank
+        entries (cond-> (vec (:lines state))
+                  (seq (:partial state)) (conj (:partial state)))
+        shown   (subvec entries (max 0 (- (count entries) (max n 0))))
+        behind  (- (count entries) (count shown))
+        dropped (- total (count (retained state)))]
+    (str
+      (when (or (pos? behind) (pos? dropped))
+        (str "…["
+          (when (pos? behind) (str behind " more lines retained"))
+          (when (and (pos? behind) (pos? dropped)) ", ")
+          (when (pos? dropped) (str dropped " chars dropped"))
+          "]\n"))
+      (apply str shown))))
 
 
 (defn since
@@ -77,7 +128,8 @@
    last one. A `from` the cap already trimmed past gets the drop announced,
    same as `text`."
   [bank from]
-  (let [{:keys [s total]} @bank
+  (let [{:keys [total] :as state} @bank
+        s     (retained state)
         start (- total (count s))]
     [(cond
        (>= from total) ""
