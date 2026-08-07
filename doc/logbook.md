@@ -307,3 +307,8 @@ the MCP connection: `(vec (range 10000))` → "9872 elided" (the wishlist's own 
 → "uncounted elision" with `(count @(__r/res 9))` → 200 behind it. One trap re-confirmed while testing: an eval
 returning an *infinite* seq never settles — deep grounding walks the return value — so the infinite case cannot
 reach the renderer at all; the honest uncounted case is a finite lazy seq. Suite green: 72 tests, 258 assertions.
+
+The trap got its teaching line the same day: the manual's grounding paragraph and the eval description now both say
+it — grounding walks the whole of each form's value, so a returned infinite seq never settles; work with them freely
+(`(def nat-ints (range))` returns the var, `(take 5 nat-ints)` a bounded value), return them bounded. Verified live
+before writing: the def-and-take shape settles cleanly through the connection.

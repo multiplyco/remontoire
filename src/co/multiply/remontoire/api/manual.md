@@ -2,8 +2,8 @@ Your toolkit is the `__r` namespace, aliased into every namespace your evals tou
 every function, signatures and docstrings, as data — is its reference. The system is read by drilling down:
 `(__r/nses)` lists the loaded namespaces, `(__r/outline 'some.ns)` reads one — signatures at a glance, docstrings and
 search via its options — `doc` and `source` read single vars, and `file` reads a whole source file. When the namespace
-is the unknown — where does that function live? — `(__r/vars "name")` searches every loaded var by name and docstring.
-Recipes for the
+is the unknown — where does that function live? — `(__r/vars "name")` searches every loaded var by name and
+docstring. Recipes for the
 common async shapes — cleanup, deadlines, partial results, integrations, work that outlives its eval, bounded fan-out,
 repeating work — are loaded pattern namespaces: `(__r/nses "patterns")` is the index, `outline` and `file` read them.
 Quiescent itself is a namespace like any other: `(__r/outline 'co.multiply.quiescent {:match "gate"})` answers what
@@ -17,7 +17,10 @@ value — failure or cancellation alike, nil otherwise — where `catch` never s
 An eval is an implicit `qdo`: each top-level form's value is grounded before the next form runs, so `(__q/sleep 5000)`
 as a form of its own is an async pause, and a returned task simply runs. Grounding is deep — a returned data structure
 of tasks, `[(__q/task (f)) (__q/task (g))]`, runs them in parallel and the eval waits for all: the idiomatic fan-out
-within one eval. That synchronous veneer ends at the form
+within one eval. Grounding walks the whole of each form's value, so what a form returns must be finite: `(range)` as a
+form's own value never settles, nor does a structure with an infinite seq anywhere inside it. Infinite seqs themselves
+are fine to work with — `(def nat-ints (range))` returns the var, `(take 5 nat-ints)` a bounded value; it is only the
+returned value that cannot be unbounded. That synchronous veneer ends at the form
 boundary — inside a form you are writing ordinary async Clojure, where a task nobody returns or composes is an orphan:
 never waited on, and cancelled silently by the time the eval settles — `(dotimes [_ 3] (__q/sleep 100))` sleeps not at
 all. The `iteration` pattern namespace carries the honest shapes.

@@ -10,6 +10,9 @@
 - Truncation announces its size: when the value renderer's caps cut a result, the response footer says how much was
   elided — exactly for counted collections (`;; truncated — 9872 elided`), a floor when a lazy tail keeps the total
   unknowable — and points at `(res id)` for the whole value. Same doctrine as eviction: announced, never silent.
+- The manual and the eval description name the infinite-lazy-return trap: grounding walks each form's whole value, so
+  a returned infinite seq never settles. Infinite seqs are fine to work with — `(def nat-ints (range))` returns the
+  var, `(take 5 nat-ints)` a bounded value; it is only the returned value that cannot be unbounded.
 
 ## 0.1.2 - 2026-08-06
 
