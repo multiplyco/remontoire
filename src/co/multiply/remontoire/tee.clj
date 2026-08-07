@@ -56,8 +56,10 @@
 (defn deposit!
   "Append `s` to `bank`. Writes assemble into newline-terminated lines —
    the unit of retention — and the cap trims whole lines from the front,
-   oldest first; only a partial that alone outgrows the cap is cut
-   mid-line, string surgery kept to that one edge."
+   oldest first. String surgery survives at one edge only: an entry that
+   alone outgrows the cap is cut from its own front rather than dropped
+   whole — the newest output is what a reader acts on (§5), and
+   tail-keeping outranks entry purity when the two collide."
   [bank ^String s]
   (swap! bank
     (fn [{:keys [lines chars partial total]} ^String added]
@@ -68,11 +70,17 @@
             part   (if whole? "" (peek pieces))
             part'  (let [n (count part)]
                      (if (> n bank-cap) (subs part (- n bank-cap)) part))
+            room   (- bank-cap (count part'))
             [q c]  (loop [q (into lines done)
                           c (transduce (map count) + chars done)]
-                     (if (and (> (+ c (count part')) bank-cap) (seq q))
-                       (recur (pop q) (- c (count (peek q))))
-                       [q c]))]
+                     (cond
+                       (<= c room)     [q c]
+                       (next (seq q))  (recur (pop q) (- c (count (peek q))))
+                       (and (seq q) (pos? room))
+                       (let [^String l (peek q)]
+                         [(conj PersistentQueue/EMPTY (subs l (- (count l) room)))
+                          room])
+                       :else           [PersistentQueue/EMPTY 0]))]
         {:lines q :chars c :partial part' :total (+ total (count added))}))
     s)
   nil)
@@ -98,27 +106,22 @@
       s)))
 
 
-(defn tail
-  "The last `n` entries `bank` retains — completed lines, plus the
-   pending unterminated line when there is one — with whatever lies
-   behind the window announced: retained lines out of view, and chars
-   the cap already dropped. A view, not a consumption: the bank keeps
-   what it keeps however it is read."
-  [bank n]
+(defn lines
+  "What `bank` retains, as a vector of lines — terminators stripped, the
+   pending unterminated line last, and chars the cap already dropped
+   announced as the first element, which is positionally honest: the
+   drop happened at the head end, and composition reaching for the tail
+   never meets it. Plain data, made for composing — `take-last` peeks,
+   `drop-last` then `take-last` pages back, `filter` searches — where
+   `text` is the verbatim reading form the responses carry. A view, not
+   a consumption: the bank keeps what it keeps however it is read."
+  [bank]
   (let [{:keys [total] :as state} @bank
-        entries (cond-> (vec (:lines state))
-                  (seq (:partial state)) (conj (:partial state)))
-        shown   (subvec entries (max 0 (- (count entries) (max n 0))))
-        behind  (- (count entries) (count shown))
         dropped (- total (count (retained state)))]
-    (str
-      (when (or (pos? behind) (pos? dropped))
-        (str "…["
-          (when (pos? behind) (str behind " more lines retained"))
-          (when (and (pos? behind) (pos? dropped)) ", ")
-          (when (pos? dropped) (str dropped " chars dropped"))
-          "]\n"))
-      (apply str shown))))
+    (cond-> []
+      (pos? dropped) (conj (str "…[" dropped " chars dropped]"))
+      true (into (map #(str/replace % #"\r?\n\z" "")) (:lines state))
+      (seq (:partial state)) (conj (:partial state)))))
 
 
 (defn since

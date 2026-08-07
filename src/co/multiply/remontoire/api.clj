@@ -65,18 +65,21 @@
 
 
 (defn out
-  "What eval `id` has printed so far — usable mid-run, since the capture
-   fills as the work speaks. Both streams, `*out*` and `*err*`,
-   interleaved in arrival order — warnings and stack traces land here
-   beside the data. `(out id n)` is the tail: the last `n` printed lines,
-   the pending unterminated line included, with whatever lies behind the
-   window announced — made for the long chatty eval, where the question
-   is \"where is it now?\" and the whole transcript is a context tax.
-   The window is the read's, not the bank's: a tail read takes nothing
-   from a later full `(out id)`. A read *about* the entry, not of its
-   result: it neither refreshes nor delivers."
-  ([id] (some-> (:bank (registry/entry id)) tee/text))
-  ([id n] (some-> (:bank (registry/entry id)) (tee/tail n))))
+  "What eval `id` has printed so far, as a vector of lines — usable
+   mid-run, since the capture fills as the work speaks. Both streams,
+   `*out*` and `*err*`, interleaved in arrival order — warnings and
+   stack traces land here beside the data — with the pending
+   unterminated line last: it is the progress line. Lines, because
+   reading back is composing: `(take-last 5 (out id))` peeks at a chatty
+   eval, `drop-last` then `take-last` pages further back, `filter`
+   searches; `(run! println (out id))` is the reading form, arriving
+   verbatim under `;; out`. Retention is the bank's 32 KiB tail — chars the cap
+   dropped are announced as the first element, never silently absent —
+   and reading takes nothing from it: however the vector is sliced, the
+   next read has it whole. A read *about* the entry, not of its result:
+   it neither refreshes nor delivers."
+  [id]
+  (some-> (:bank (registry/entry id)) tee/lines))
 
 
 (defn failure

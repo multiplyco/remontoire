@@ -330,3 +330,12 @@ last two lines plus the in-progress print with the window announced, the full re
 itself demonstrated the transition hazard on cue: the eval carrying the `:reload` deposited into a bank minted by
 the old build and NPE'd — old-shape state meeting new code, machinery-subtracted frames pointing straight at it;
 the next eval minted fresh and ran clean. Suite green: 74 tests, 266 assertions.
+
+Revised the same day: the windowing arity lasted hours. Henrik's ergonomics question — wouldn't `out` returning the
+vector compose better than `(out id n)`? — answered itself the moment it met the doctrine: results are plain data,
+composition is the option surface, and `(out id n skip)` is exactly the per-function knob §2 rejects. So `out`
+returns the vector of lines (terminators stripped, pending line last), `take-last` peeks, `drop-last` pages,
+`filter` searches — verified live, all four idioms through the connection — and the drop announcement moved to the
+vector's first element, positionally honest at the head end where tail-reaching composition never meets it. One
+trim rule tightened in passing: a completed entry outgrowing the whole cap is now cut from its own front instead of
+dropped whole — tail-keeping outranks entry purity when the two collide. Suite green: 75 tests, 268 assertions.

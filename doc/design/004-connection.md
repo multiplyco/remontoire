@@ -74,10 +74,13 @@ construction for the whole task tree, a per-link `binding` for Clojure conveyanc
 Banks are per-entry, capped at 32 KiB keeping the tail with the drop announced. Restructured 2026-08-07 (wishlist
 item 6): a bank stores completed lines plus the pending unterminated partial, not one string — the line is the unit
 of retention, so trimming drops whole entries oldest-first (string surgery survives only at the one edge where a
-single line outgrows the whole cap), `deposit!` stopped re-copying the retained 32 KiB per write, and `(__r/out id n)`
-windows the last `n` entries with what lies behind announced — a view over the same bank, taking nothing from a later
-full `(__r/out id)`. The `since` cursor (the heartbeat's read) kept its character-count contract unchanged through
-the restructure. Every response branch carries
+single entry outgrows the whole cap — cut from its own front rather than dropped whole, tail-keeping outranking entry
+purity), and `deposit!` stopped re-copying the retained 32 KiB per write. `__r/out` returns the vector of lines —
+pending unterminated line last, chars the cap dropped announced as the first element, positionally honest at the head
+end where tail-reaching composition never meets it. No windowing arity, deliberately: a `(out id n skip)` surface was
+built and retired the same day for the invariant's form — `take-last` peeks, `drop-last` pages, `filter` searches,
+and the one composition a string forced (`str/split-lines` before everything) is gone. The `since` cursor (the
+heartbeat's read) kept its character-count contract unchanged through the restructure. Every response branch carries
 `;; out` — value first (§4), then output, then footer — because a running or failed eval's output is often the most
 informative thing about it; `(__r/out id)` reads a bank mid-run without delivering, via the non-touching
 `registry/entry` accessor (§5). Verified through the live connection: top-level, nested-task and `future` prints
