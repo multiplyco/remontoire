@@ -26,4 +26,4 @@
   ;; Quiescent but converts explicitly, channel → task — the entry's
   ;; lifetime then covers the go block:
   (require '[co.multiply.quiescent.adapter.core-async])
-  (__q/as-task (fetch-through-channels!)))
+  (q/as-task (fetch-through-channels!)))

@@ -20,7 +20,7 @@
     [clojure.string :as str]
     [co.multiply.scoped :as sc])
   (:import
-    [clojure.lang PersistentQueue]
+    [clojure.lang PersistentQueue Var]
     [java.io Writer]))
 
 
@@ -71,16 +71,16 @@
             part'  (let [n (count part)]
                      (if (> n bank-cap) (subs part (- n bank-cap)) part))
             room   (- bank-cap (count part'))
-            [q c]  (loop [q (into lines done)
-                          c (transduce (map count) + chars done)]
-                     (cond
-                       (<= c room)     [q c]
-                       (next (seq q))  (recur (pop q) (- c (count (peek q))))
-                       (and (seq q) (pos? room))
-                       (let [^String l (peek q)]
-                         [(conj PersistentQueue/EMPTY (subs l (- (count l) room)))
-                          room])
-                       :else           [PersistentQueue/EMPTY 0]))]
+            [q c] (loop [q (into lines done)
+                         c (transduce (map count) + chars done)]
+                    (cond
+                      (<= c room) [q c]
+                      (next (seq q)) (recur (pop q) (- c (count (peek q))))
+                      (and (seq q) (pos? room))
+                      (let [^String l (peek q)]
+                        [(conj PersistentQueue/EMPTY (subs l (- (count l) room)))
+                         room])
+                      :else [PersistentQueue/EMPTY 0]))]
         {:lines q :chars c :partial part' :total (+ total (count added))}))
     s)
   nil)
@@ -90,8 +90,8 @@
   "The bank's whole retained text, verbatim — lines then partial."
   ^String [{:keys [lines partial]}]
   (let [sb (StringBuilder.)]
-    (doseq [^String l lines] (.append sb l))
-    (-> sb (.append ^String partial) .toString)))
+    (doseq [^String l lines] (StringBuilder/.append sb l))
+    (-> sb (StringBuilder/.append ^String partial) StringBuilder/.toString)))
 
 
 (defn text
@@ -147,7 +147,7 @@
   [^Writer original ^String s]
   (when-let [b (sc/ask *bank* nil)]
     (deposit! b s))
-  (.write original s))
+  (Writer/.write original s))
 
 
 (defn- tee-writer
@@ -170,10 +170,10 @@
            (subs x off (+ off len))
            (String. ^chars x (int off) (int len))))))
 
-    (flush [] (.flush ^Writer original))
+    (flush [] (Writer/.flush original))
     ;; The root writer's lifetime is the JVM's; closing the tee must not
     ;; close what it wraps.
-    (close [] (.flush ^Writer original))))
+    (close [] (Writer/.flush original))))
 
 
 ;; Holds the original root writers, `{:out w :err w}`, while the tees are
@@ -191,8 +191,8 @@
   []
   (locking installed
     (when-not @installed
-      (let [out (.getRawRoot #'*out*)
-            err (.getRawRoot #'*err*)]
+      (let [out (Var/.getRawRoot #'*out*)
+            err (Var/.getRawRoot #'*err*)]
         (alter-var-root #'*out* (constantly (tee-writer out)))
         (alter-var-root #'*err* (constantly (tee-writer err)))
         (reset! installed {:out out :err err})))

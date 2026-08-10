@@ -9,7 +9,7 @@
     [co.multiply.remontoire.session :as session]
     [co.multiply.remontoire.tee :as tee]
     [co.multiply.scoped :as sc])
-  (:import [clojure.lang LineNumberingPushbackReader]
+  (:import [clojure.lang LineNumberingPushbackReader Namespace]
     [java.io StringReader]))
 
 
@@ -28,15 +28,15 @@
   (binding [*ns* (create-ns (session/scratch-ns-sym session))]
     ;; `create-ns` alone gives a namespace in which `+` does not resolve.
     (refer-clojure)
-    ;; The composition surface is clojure.core *and* Quiescent (§5): the
-    ;; `q`-prefixed macros referred bare — correct here precisely because
-    ;; scratch is a namespace the session owns — and the library under
-    ;; `__q`, the same spelling every visited namespace guarantees, so
-    ;; nothing diverges when an eval moves. `q` itself is left free:
-    ;; reserved for user code, the model's to establish. And `res` is how
-    ;; an id in one response becomes a value in the next expression — so
-    ;; scratch resolves them all from the start.
-    (require '[co.multiply.quiescent :as __q
+    ;; The composition surface is clojure.core *and* Quiescent (§5),
+    ;; spelled exactly as committed source spells it — the `q` alias plus
+    ;; the `q`-prefixed macros referred bare — correct here precisely
+    ;; because scratch is a namespace the session owns. Idioms thereby
+    ;; copy verbatim between evals, the Quiescent skill, and source
+    ;; files; outside scratch, aliasing Quiescent is the model's own act
+    ;; (§4). And `res` is how an id in one response becomes a value in
+    ;; the next expression — so scratch resolves them all from the start.
+    (require '[co.multiply.quiescent :as q
                :refer [q qdo qjoin qfor qlet qmerge if-qlet when-qlet]]
       '[co.multiply.remontoire.registry :refer [res evals]]
       '[co.multiply.remontoire.api :as __r])
@@ -44,27 +44,21 @@
 
 
 (defn- ensure-aliases!
-  "Make `__r/…` and `__q/…` resolve in `ns` — the API layer and Quiescent,
-   the tooling rail, reachable wherever an eval navigates (§11) by
-   construction rather than instruction: `res` hands back tasks precisely
-   so that `catch`/`cancel`/`then` are the access idioms, so the rail is
-   incomplete without Quiescent's verbs. `__q` and not `q`, deliberately:
-   `q` is reserved for user code — host namespaces own their meaning of
-   it, and the fill-when-free `q` this replaces (2026-08-05) made that
-   meaning *conditional*, unknowable from where the model stands — where
-   `__q`, like `__r`, is self-owned tooling: obscure by design, guaranteed
-   everywhere, colliding with nothing. Both are reasserted when they point
-   anywhere else — a `__r`/`__q` bound otherwise is a stale manual
-   experiment, not a claim the invariant should yield to (observed
-   2026-08-04: a hand-aliased `__r` in the REPL's own ns shadowed the API
-   with a confusing `No such var`)."
+  "Make `__r/…` resolve in `ns` — the API layer reachable wherever an eval
+   navigates (§11) by construction rather than instruction. `__r` alone
+   since 2026-08-10 (§4): Quiescent is an ordinary library the model
+   aliases for itself — `q` in scratch by construction, its own act
+   elsewhere — so nothing conditional is ever injected into a namespace
+   the host owns. Reasserted when it points anywhere else — a `__r` bound
+   otherwise is a stale manual experiment, not a claim the invariant
+   should yield to (observed 2026-08-04: a hand-aliased `__r` in the
+   REPL's own ns shadowed the API with a confusing `No such var`)."
   [ns]
   (let [assert! (fn [alias target]
                   (when-not (identical? target (get (ns-aliases ns) alias))
-                    (.removeAlias ^clojure.lang.Namespace ns alias)
-                    (.addAlias ^clojure.lang.Namespace ns alias target)))]
-    (assert! '__r (the-ns 'co.multiply.remontoire.api))
-    (assert! '__q (the-ns 'co.multiply.quiescent))))
+                    (Namespace/.removeAlias ns alias)
+                    (Namespace/.addAlias ns alias target)))]
+    (assert! '__r (the-ns 'co.multiply.remontoire.api))))
 
 
 (defn- resolve-ns

@@ -44,8 +44,8 @@
 
 (defn res
   "The task for eval `id`. Deref for the value — safe to repeat — or compose:
-   `(__q/cancel (res 12))` cancels, handlers chain onto it. To read an
-   exception, `(__q/get-ex (res 12))` is it as a value — failure or
+   `(q/cancel (res 12))` cancels, handlers chain onto it. To read an
+   exception, `(q/get-ex (res 12))` is it as a value — failure or
    cancellation alike, nil otherwise; `catch` also reads a failure, but a
    *cancelled* entry passes cancellation through `catch` to whatever eval
    composes on it. Reading is delivery: it refreshes the entry and admits
@@ -86,7 +86,7 @@
   "The rendered failure of eval `id`: the exception chain and the
    interesting frames, the eval machinery's own frames subtracted — the
    same rendering a failed eval response carries. A rendering, not the
-   throwable — for programmatic access, `(__q/get-ex (res id))` is the
+   throwable — for programmatic access, `(q/get-ex (res id))` is the
    exception itself as a value, cancellation included, and `ex-data` works
    from there. Reading a failure is delivery, like any `res`. When `id`
    did not fail, says how it stands instead — safe for any state."
@@ -167,11 +167,13 @@
 
 
 (defn nses
-  "Every loaded namespace, as a sorted vector of symbols — the system at a
+  "Every loaded namespace, as a vector of symbols — the system at a
    glance, and the top of the drilldown: `nses` to find the namespace,
    `outline` to read it, `doc` and `source` for its vars. An optional
-   `match` keeps only matching names: a string (case-insensitive
-   substring), a regex, or a symbol matched as its name — so
+   `match` — a string (case-insensitive substring), a regex, or a symbol
+   matched as its name — searches names and namespace docstrings, ranked
+   the way `vars` ranks: exact whole-segment matches first, then
+   remaining name hits, then docstring-only hits — so
    `(nses \"session\")` searches, and `(nses 'co.multiply.quiescent)`
    answers whether a namespace is really loaded. Plain data, made for
    composing — filter it, count it, map `outline` over it. The view is
@@ -221,8 +223,10 @@
    var — name, arglists, `:line`, `:macro`/`:private`/`:dynamic` flags, a
    multimethod's dispatch values — in source order, privates included and
    marked, because the point is the gist of the namespace, not just its
-   API. Designate the namespace by symbol, by an alias visible from the
-   calling namespace, or with the namespace itself: `(outline '__r)`.
+   API; when the API is exactly the question, `{:include-private false}`
+   keeps the public surface alone. Designate the namespace by symbol, by
+   an alias visible from the calling namespace, or with the namespace
+   itself: `(outline '__r)`.
    Bare output is small enough for any namespace, with the ns docstring's
    first sentence for orientation; `{:include-docstrings true}` carries
    every docstring whole — one roundtrip for a full overview when the
@@ -241,7 +245,7 @@
    a spec if given a keyword. Printed, not returned — the eval response
    carries it as output. The name resolves in the current namespace, and
    an unresolvable one prints nothing rather than throwing — qualify
-   (`__r/failure`, `__q/catch`) when in doubt."
+   (`__r/failure`, `q/catch`) when in doubt."
   [name]
   `(crepl/doc ~name))
 
@@ -251,7 +255,7 @@
    `outline` and `doc` show what is *live* — after a hot reload the two
    can differ. Printed, not returned — the eval response carries it as
    output. The name resolves in the current namespace — qualify
-   (`__r/failure`, `__q/catch`) when in doubt — and the defining file must
+   (`__r/failure`, `q/catch`) when in doubt — and the defining file must
    be on the classpath, which holds for anything shipped as source;
    otherwise, and for an unresolvable name, it prints `Source not
    found`."

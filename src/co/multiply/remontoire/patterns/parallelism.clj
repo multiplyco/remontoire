@@ -1,11 +1,11 @@
 (ns co.multiply.remontoire.patterns.parallelism
   "Fanning out inside a system that is also doing its day job. Tasks in
-   data structures already run in parallel — `(__q/task {:a (f) :b (g)})`
+   data structures already run in parallel — `(q/task {:a (f) :b (g)})`
    grounds both at once — and `qfor` maps in parallel when its body
    spawns tasks. The recipe worth naming is the brake: a `gate` bounds
    how many run at once, because an unbounded fan-out over production
    data competes with production."
-  (:require [co.multiply.quiescent :as __q :refer [qfor]]))
+  (:require [co.multiply.quiescent :as q :refer [qfor]]))
 
 
 (defn gated
@@ -15,12 +15,12 @@
    concurrency — cancelling the eval cancels the enqueued work with it,
    nothing keeps running behind the brake."
   [n f coll]
-  (let [g (__q/gate n)]
+  (let [g (q/gate n)]
     (qfor [x coll]
-      (__q/gate-task g (f x)))))
+      (q/gate-task g (f x)))))
 
 
 (comment
   ;; Eight at a time across ten thousand ids, cancellable as one unit
   ;; by this eval's id:
-  (gated 8 #(__q/task (expensive-check %)) all-ids))
+  (gated 8 #(q/task (expensive-check %)) all-ids))

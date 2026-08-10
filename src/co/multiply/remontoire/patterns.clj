@@ -6,10 +6,11 @@
    namespace for its signatures and docstrings; `file` it for the
    `(comment …)` walkthroughs, which is where eval-by-eval choreography
    lives. Walkthrough code is *eval* code: it assumes the scratch
-   refers (`qlet`, `qfor`, …) and the `__r`/`__q` aliases, like any
-   eval. These namespaces speak the tooling spelling throughout — `__q`,
-   the alias your evals carry everywhere — not the `q` of committed user
-   code, which is yours to require in source you own. House discipline:
+   wiring — the `q` alias, the bare refers (`qlet`, `qfor`, …) and
+   `__r` — like any eval. These namespaces spell Quiescent `q`, exactly
+   as committed source and the scratch namespace do; evaluating a
+   walkthrough somewhere else means aliasing Quiescent there yourself
+   first. House discipline:
    defns and comment blocks only, nothing effectful at the top level —
    these namespaces load inside the host JVM at boot, so loading must be
    inert."

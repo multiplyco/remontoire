@@ -41,7 +41,7 @@
 
 
 (deftest a-returned-task-runs-and-grounds
-  (is (= :slept (:value (run!! "(__q/sleep 30 :slept)" (session/mint!))))))
+  (is (= :slept (:value (run!! "(q/sleep 30 :slept)" (session/mint!))))))
 
 
 (deftest forms-ground-in-order
@@ -49,7 +49,7 @@
   ;; is an implicit qdo, not three racing forms.
   (is (= [:first :second]
          (:value (run!! (str "(def a (atom [])) "
-                          "(__q/task (Thread/sleep 40) (swap! a conj :first)) "
+                          "(q/task (Thread/sleep 40) (swap! a conj :first)) "
                           "(swap! a conj :second)")
                    (session/mint!))))))
 
@@ -61,7 +61,7 @@
     ;; outlive it.
     (let [{:keys [value error]}
           (run!! (str "(def hit (atom 0)) "
-                   "(dotimes [_ 3] (__q/task (Thread/sleep 300) (swap! hit inc))) "
+                   "(dotimes [_ 3] (q/task (Thread/sleep 300) (swap! hit inc))) "
                    ":done")
             sid)]
       (is (nil? error))
@@ -71,7 +71,7 @@
       "orphans were cancelled when the eval settled — none completed")
     ;; The moat: compelled work runs to completion.
     (run!! (str "(def kept (atom 0)) "
-             "(__q/compel (__q/task (Thread/sleep 100) (swap! kept inc))) "
+             "(q/compel (q/task (Thread/sleep 100) (swap! kept inc))) "
              ":done")
       sid)
     (Thread/sleep 600)
@@ -82,6 +82,8 @@
   (let [sid (session/mint!)]
     (is (= 3 (:value (run!! "(qlet [x (q 1) y (q 2)] (+ x y))" sid)))
       "the q-prefixed macros are referred bare in scratch")
+    (is (= 1 (:value (run!! "(q/task 1)" sid)))
+      "Quiescent is aliased q — the committed-source spelling")
     (is (true? (:value (run!! "(vector? (__r/nses))" sid)))
       "__r resolves in scratch")
     (is (true? (:value (run!! "(vector? (evals))" sid)))
@@ -124,6 +126,9 @@
       (is (= 'co.multiply.remontoire.api
              (:value (run!! "(:ns (__r/outline '__r))" "remontoire.test.visited" sid)))
         "__r resolves, and outline accepts it as an alias designator")
+      (is (empty? (:value (run!! "(keys (select-keys (ns-aliases *ns*) '[q __q]))"
+                            "remontoire.test.visited" sid)))
+        "__r alone follows — Quiescent is aliased nowhere the model didn't do it")
       (finally (remove-ns 'remontoire.test.visited)))))
 
 

@@ -86,4 +86,7 @@
   (init! {:describe "A Remontoire REPL to the Remontoire project itself"})
   (stop!)
 
+  (filterv #(-> % :private not) (:vars (__r/outline 'co.multiply.quiescent)))
+  (co.multiply.remontoire.api/outline 'co.multiply.quiescent)
+
   :-)

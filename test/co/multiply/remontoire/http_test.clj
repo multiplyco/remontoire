@@ -12,9 +12,10 @@
     [co.multiply.remontoire.test-util :as tu])
   (:import
     [com.sun.net.httpserver HttpServer]
-    [java.net URI]
-    [java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
-     HttpResponse HttpResponse$BodyHandlers]))
+    [java.net InetSocketAddress URI]
+    [java.net.http HttpClient HttpHeaders HttpRequest HttpRequest$Builder
+     HttpRequest$BodyPublishers HttpResponse HttpResponse$BodyHandlers]
+    [java.util Optional]))
 
 
 (def ^:dynamic ^String *url* nil)
@@ -26,8 +27,8 @@
     (remontoire/init! {:port            0
                        :describe        "the test rig"
                        :allowed-origins #{"https://ok.example"}})
-    (let [server ^HttpServer (:server @@#'remontoire/running)
-          port   (.getPort (.getAddress server))]
+    (let [server (:server @@#'remontoire/running)
+          port   (InetSocketAddress/.getPort (HttpServer/.getAddress server))]
       (binding [*url* (str "http://127.0.0.1:" port "/mcp")]
         (try (f) (finally (remontoire/stop!)))))))
 
@@ -40,30 +41,32 @@
   (let [builder (HttpRequest/newBuilder (URI/create *url*))]
     (case (or method :post)
       :post (-> builder
-              (.header "Content-Type" "application/json")
-              (.POST (HttpRequest$BodyPublishers/ofString (json/write-str body))))
-      :get (.GET builder)
-      :delete (.method builder "DELETE" (HttpRequest$BodyPublishers/noBody)))
-    (when sid (.header builder "Mcp-Session-Id" sid))
-    (when accept (.header builder "Accept" accept))
-    (when origin (.header builder "Origin" origin))
-    (.build builder)))
+              (HttpRequest$Builder/.header "Content-Type" "application/json")
+              (HttpRequest$Builder/.POST
+                (HttpRequest$BodyPublishers/ofString (json/write-str body))))
+      :get (HttpRequest$Builder/.GET builder)
+      :delete (HttpRequest$Builder/.method builder "DELETE"
+                (HttpRequest$BodyPublishers/noBody)))
+    (when sid (HttpRequest$Builder/.header builder "Mcp-Session-Id" sid))
+    (when accept (HttpRequest$Builder/.header builder "Accept" accept))
+    (when origin (HttpRequest$Builder/.header builder "Origin" origin))
+    (HttpRequest$Builder/.build builder)))
 
 
 (defn- send!
   (^HttpResponse [body] (send! body nil))
   (^HttpResponse [body opts]
-   (.send client (build body opts) (HttpResponse$BodyHandlers/ofString))))
+   (HttpClient/.send client (build body opts) (HttpResponse$BodyHandlers/ofString))))
 
 
 (defn- parsed
-  [^HttpResponse resp]
-  (json/read-str (.body resp) :key-fn keyword))
+  [resp]
+  (json/read-str (HttpResponse/.body resp) :key-fn keyword))
 
 
 (defn- header-of
-  [^HttpResponse resp k]
-  (.orElse (.firstValue (.headers resp) k) nil))
+  [resp k]
+  (Optional/.orElse (HttpHeaders/.firstValue (HttpResponse/.headers resp) k) nil))
 
 
 (defn- init-body
@@ -78,7 +81,7 @@
   []
   (let [resp (send! (init-body))
         sid  (header-of resp "Mcp-Session-Id")]
-    (is (= 200 (.statusCode resp)))
+    (is (= 200 (HttpResponse/.statusCode resp)))
     (is (some? sid))
     sid))
 
@@ -103,7 +106,7 @@
 (deftest initialize-mints-a-session-and-teaches
   (let [resp (send! (init-body))
         body (parsed resp)]
-    (is (= 200 (.statusCode resp)))
+    (is (= 200 (HttpResponse/.statusCode resp)))
     (is (some? (header-of resp "Mcp-Session-Id")))
     (is (map? (get-in body [:result :serverInfo])))
     (is (str/includes? (get-in body [:result :instructions]) "the test rig")
@@ -111,20 +114,20 @@
 
 
 (deftest bare-requests-are-refused
-  (is (= 400 (.statusCode (send! {:jsonrpc "2.0" :id 1 :method "tools/list"})))
+  (is (= 400 (HttpResponse/.statusCode (send! {:jsonrpc "2.0" :id 1 :method "tools/list"})))
     "every client initializes before anything else"))
 
 
 (deftest origins-are-checked-and-cors-never-offered
-  (is (= 403 (.statusCode (send! (init-body) {:origin "https://evil.example"}))))
+  (is (= 403 (HttpResponse/.statusCode (send! (init-body) {:origin "https://evil.example"}))))
   (let [resp (send! (init-body) {:origin "https://ok.example"})]
-    (is (= 200 (.statusCode resp)))
+    (is (= 200 (HttpResponse/.statusCode resp)))
     (is (nil? (header-of resp "Access-Control-Allow-Origin"))
       "an allowed origin is served, never advertised")))
 
 
 (deftest only-post-speaks
-  (is (= 405 (.statusCode (send! nil {:method :get})))))
+  (is (= 405 (HttpResponse/.statusCode (send! nil {:method :get})))))
 
 
 (defn- at-probe
@@ -140,7 +143,7 @@
       (let [roster-before (count (session/roster))
             resp          (send! nil {:method :get})
             body          (parsed resp)]
-        (is (= 200 (.statusCode resp)))
+        (is (= 200 (HttpResponse/.statusCode resp)))
         (is (= "remontoire" (:server body))
           "the fixed discriminator discovery keys on")
         (is (and (string? (:version body)) (seq (:version body))))
@@ -154,11 +157,11 @@
 (deftest probe-is-get-only-and-origin-gated
   (at-probe
     (fn []
-      (is (= 405 (.statusCode (send! {:jsonrpc "2.0"})))
+      (is (= 405 (HttpResponse/.statusCode (send! {:jsonrpc "2.0"})))
         "POST does not speak here")
-      (is (= 403 (.statusCode
+      (is (= 403 (HttpResponse/.statusCode
                    (send! nil {:method :get :origin "https://evil.example"}))))
-      (is (= 200 (.statusCode
+      (is (= 200 (HttpResponse/.statusCode
                    (send! nil {:method :get :origin "https://ok.example"})))))))
 
 
@@ -181,7 +184,7 @@
 
 (deftest async-work-spans-requests
   (let [sid (initialize!)
-        r1  (call! sid "eval" {:code "(__q/sleep 300 :late)" :await 1})
+        r1  (call! sid "eval" {:code "(q/sleep 300 :late)" :await 1})
         id  (id-of r1)]
     (is (str/includes? (text-of r1) "running"))
     (is (str/includes? (text-of (call! sid "await" {:all-of [id] :await 5000}))
@@ -194,7 +197,7 @@
 
 (deftest cancel-over-the-wire
   (let [sid (initialize!)
-        id  (id-of (call! sid "eval" {:code "(__q/sleep 60000)" :await 1}))]
+        id  (id-of (call! sid "eval" {:code "(q/sleep 60000)" :await 1}))]
     (is (str/includes? (text-of (call! sid "cancel" {:ids [id] :await 3000}))
           ":cancelled"))))
 
@@ -204,13 +207,13 @@
         resp (send! {:jsonrpc "2.0" :id 5 :method "tools/call"
                      :params  {:name "eval" :arguments {:code "(* 6 7)"}}}
                {:sid sid :accept "application/json, text/event-stream"})]
-    (is (= 200 (.statusCode resp)))
+    (is (= 200 (HttpResponse/.statusCode resp)))
     (is (str/starts-with? (or (header-of resp "Content-Type") "")
           "text/event-stream"))
     (let [messages (into []
                      (comp (filter #(str/starts-with? % "data: "))
                        (map #(json/read-str (subs % 6) :key-fn keyword)))
-                     (str/split-lines (.body resp)))
+                     (str/split-lines (HttpResponse/.body resp)))
           result   (first (filter :result messages))]
       (is (some? result) "the stream carries the one response message")
       (is (str/starts-with? (get-in result [:result :content 0 :text]) "42")))))
@@ -230,7 +233,7 @@
                                                       " (* " n " " n "))")}}}
                   {:sid sid}))
         tasks (mapv (fn [n]
-                      (q/as-task (.sendAsync client (req n)
+                      (q/as-task (HttpClient/.sendAsync client (req n)
                                    (HttpResponse$BodyHandlers/ofString))))
                 [2 3 4])
         texts (mapv (comp text-of parsed) @(q/task tasks))]
@@ -244,5 +247,5 @@
 
 (deftest goodbye-releases-the-session
   (let [sid (initialize!)]
-    (is (= 204 (.statusCode (send! nil {:method :delete :sid sid}))))
+    (is (= 204 (HttpResponse/.statusCode (send! nil {:method :delete :sid sid}))))
     (is (not-any? #(= sid (:sid %)) (session/roster)))))

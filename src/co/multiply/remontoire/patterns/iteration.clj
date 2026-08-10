@@ -5,11 +5,11 @@
    so blocking is cheap and `Thread/sleep` in a loop is simply correct.
    The trap is mixing the two: `dotimes`/`doseq`/`run!` spawning tasks
    makes orphans — children never returned, cascade-cancelled the moment
-   the form settles, silently. `__q/sleep` itself is fine *composed* —
-   `(qdo (__q/sleep 1000) (fire!))` is delay-then-do — the trap is
+   the form settles, silently. `q/sleep` itself is fine *composed* —
+   `(qdo (q/sleep 1000) (fire!))` is delay-then-do — the trap is
    discarding what it returns. If you reached for `dotimes` around
-   `__q/task` or `__q/sleep`, reach for one of the shapes below instead."
-  (:require [co.multiply.quiescent :as __q :refer [qfor]]))
+   `q/task` or `q/sleep`, reach for one of the shapes below instead."
+  (:require [co.multiply.quiescent :as q :refer [qfor]]))
 
 
 (defn sequentially
@@ -20,7 +20,7 @@
    *inside* the task, so nothing is orphaned and the eval's id addresses
    the whole run."
   [f coll]
-  (__q/task (mapv f coll)))
+  (q/task (mapv f coll)))
 
 
 (comment
@@ -28,12 +28,12 @@
   (sequentially (fn [n] (Thread/sleep 1000) (probe! n)) (range 10))
 
   ;; A composed sleep — delay-then-do, returned so it runs:
-  (qdo (__q/sleep 1000) (fire!))
+  (qdo (q/sleep 1000) (fire!))
 
   ;; The same, parallel — one task per element, `qfor` returns them all:
   (qfor [n (range 10)]
-    (__q/task (Thread/sleep 1000) (probe! n)))
+    (q/task (Thread/sleep 1000) (probe! n)))
 
   ;; The trap, for recognition — returns immediately, probes never fire,
   ;; the sleeps are orphaned children cancelled as the form settles:
-  (dotimes [n 10] (__q/task (Thread/sleep 1000) (probe! n))))
+  (dotimes [n 10] (q/task (Thread/sleep 1000) (probe! n))))

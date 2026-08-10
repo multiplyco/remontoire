@@ -112,20 +112,39 @@
 
 
 (defn nses
-  "Every loaded namespace, sorted — the system at a glance, and the top of
-   the drilldown that `outline` continues. `match` (string or regex, the
-   same matcher `outline` takes; a symbol is matched as its name, so
-   `(nses 'some.ns)` answers whether a namespace is really loaded) keeps
-   only matching names. Names only, deliberately: a flat vector of
-   symbols is the composable form — filter it, count it, map `outline`
-   over it. Loaded namespaces, not the classpath: what the running system
-   has actually required."
+  "Every loaded namespace — the system at a glance, and the top of the
+   drilldown that `outline` continues. `match` (a string, a regex, or a
+   symbol matched as its name, as everywhere) searches names and
+   namespace docstrings, ranked the way `vars` ranks: names with a whole
+   dot-segment matching exactly first — \"outline\" puts `x.outline`
+   above `x.outline-test` — then remaining name hits, then
+   docstring-only hits, alphabetical within each tier; so
+   `(nses 'some.ns)` still answers whether a namespace is really loaded.
+   Without `match`, all of them, sorted. Names only, deliberately: a
+   flat vector of symbols is the composable form — filter it, count it,
+   map `outline` over it — which means a docstring hit carries no quoted
+   evidence; `outline` the namespace to see it. Loaded namespaces, not
+   the classpath: what the running system has actually required."
   ([] (nses nil))
   ([match]
-   (let [hit (matcher (if (symbol? match) (str match) match))]
-     (into []
-       (cond->> (sort (map ns-name (all-ns)))
-         hit (filter #(hit (str %))))))))
+   (let [m   (if (symbol? match) (str match) match)
+         hit (matcher m)]
+     (if-not hit
+       (into [] (sort (map ns-name (all-ns))))
+       (let [exact (if (string? m)
+                     #(String/.equalsIgnoreCase m %)
+                     #(boolean (re-matches m %)))
+             tier  (fn [ns]
+                     (let [n (str (ns-name ns))]
+                       (cond
+                         (or (exact n)
+                           (some exact (str/split n #"\."))) 0
+                         (hit n) 1
+                         (some-> (:doc (meta ns)) hit) 2)))]
+         (->> (all-ns)
+           (keep #(when-let [t (tier %)] [t (ns-name %)]))
+           sort
+           (mapv second)))))))
 
 
 (defn vars
@@ -172,14 +191,16 @@
    glance when the rendered manual moved into the instructions
    themselves and outline returned to being a reading tool."
   ([ns] (outline ns nil))
-  ([ns {:keys [include-docstrings match]}]
+  ([ns {:keys [include-docstrings include-private match]
+        :or   {include-private true}}]
    (let [ns  (designated ns)
          hit (matcher match)
          doc (:doc (meta ns))]
-     (cond-> {:ns (ns-name ns)}
-       doc (assoc :doc (if include-docstrings doc (gist doc)))
-       true (assoc :vars
-              (->> (vals (ns-interns ns))
-                (keep #(entry % include-docstrings hit))
-                (sort-by (fn [e] (or (:line e) Long/MAX_VALUE)))
-                (into [])))))))
+     (-> {:ns (ns-name ns)}
+       (cond-> doc (assoc :doc (if include-docstrings doc (gist doc))))
+       (assoc :vars
+         (let [entries (keep #(entry % include-docstrings hit) (vals (ns-interns ns)))
+               entries (if include-private entries (filter #(-> % :private not) entries))]
+           (->> entries
+             (sort-by (fn [e] (or (:line e) Long/MAX_VALUE)))
+             (into []))))))))

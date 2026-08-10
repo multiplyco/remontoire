@@ -6,8 +6,12 @@
   (:require
     [clojure.string :as str]
     [clojure.test :refer [deftest is]]
+    ;; The fix alias looks unused but is resolved dynamically:
+    ;; designators-compose passes 'fix to outline as an alias designator.
     [co.multiply.remontoire.fixture :as fix]
-    [co.multiply.remontoire.outline :as outline]))
+    [co.multiply.remontoire.outline :as outline])
+  (:import
+    [java.util List]))
 
 
 (deftest nses-lists-loaded-namespaces
@@ -17,12 +21,33 @@
     (is (= all (vec (sort all))) "sorted")
     (is (some #{'clojure.core} all)))
   (is (= ['co.multiply.remontoire.fixture]
-         (outline/nses 'co.multiply.remontoire.fixture))
+        (outline/nses 'co.multiply.remontoire.fixture))
     "a symbol answers whether a namespace is loaded")
   (is (= [] (outline/nses 'no.such.loaded.ns)))
   (let [hits (outline/nses "REMONTOIRE")]
     (is (seq hits) "string match is case-insensitive")
     (is (every? #(str/includes? (str %) "remontoire") hits))))
+
+
+(deftest nses-ranks-like-vars
+  ;; aaa.* sorts before co.*, so alphabetical order alone would put both
+  ;; created namespaces first — only ranking explains the fixture leading.
+  (try
+    (create-ns 'aaa.fixture-adjacent)
+    (alter-meta! (create-ns 'aaa.remarks) assoc
+      :doc "Mentions the fixture namespace without resembling it.")
+    (let [hits (outline/nses "fixture")
+          pos  #(List/.indexOf hits %)]
+      (is (every? #(<= 0 (pos %))
+            '[co.multiply.remontoire.fixture aaa.fixture-adjacent aaa.remarks])
+        "name hits, substring hits and docstring hits all surface")
+      (is (< (pos 'co.multiply.remontoire.fixture) (pos 'aaa.fixture-adjacent))
+        "an exact segment outranks a substring hit, whatever the alphabet says")
+      (is (< (pos 'aaa.fixture-adjacent) (pos 'aaa.remarks))
+        "a name hit outranks a docstring-only hit"))
+    (finally
+      (remove-ns 'aaa.fixture-adjacent)
+      (remove-ns 'aaa.remarks))))
 
 
 (deftest vars-searches-the-whole-loaded-system
@@ -58,7 +83,7 @@
     (is (= 'co.multiply.remontoire.fixture (:ns o)))
     (is (string? (:doc o)))
     (is (= '[plain-value hidden *knob* public-fn private-fn public-macro poly]
-           (mapv :name (:vars o)))
+          (mapv :name (:vars o)))
       "source order, privates included")
     (is (true? (:private (by-name 'hidden))))
     (is (true? (:macro (by-name 'public-macro))))
@@ -79,14 +104,20 @@
       "a docstring hit keeps the var")
     (is (seq (:matched (first (:vars m)))) "and quotes its evidence"))
   (let [m (outline/outline 'co.multiply.remontoire.fixture {:match "public"})]
-    (is (= '[public-fn public-macro] (mapv :name (:vars m))))))
+    (is (= '[public-fn public-macro] (mapv :name (:vars m)))))
+  (let [pub (outline/outline 'co.multiply.remontoire.fixture
+              {:include-private false})]
+    (is (not-any? :private (:vars pub)) "the public surface alone on request")
+    (is (= '[plain-value *knob* public-fn public-macro poly]
+          (mapv :name (:vars pub)))
+      "everything else survives the filter, order untouched")))
 
 
 (deftest designators-compose
   (is (= 'co.multiply.remontoire.fixture
-         (:ns (outline/outline "co.multiply.remontoire.fixture"))))
+        (:ns (outline/outline "co.multiply.remontoire.fixture"))))
   (is (= 'co.multiply.remontoire.fixture
-         (:ns (outline/outline (the-ns 'co.multiply.remontoire.fixture)))))
+        (:ns (outline/outline (the-ns 'co.multiply.remontoire.fixture)))))
   (binding [*ns* (the-ns 'co.multiply.remontoire.outline-test)]
     (is (= 'co.multiply.remontoire.fixture (:ns (outline/outline 'fix)))
       "an alias visible from the calling namespace designates"))

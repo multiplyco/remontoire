@@ -133,7 +133,7 @@
 
 (deftest long-work-returns-running-and-its-settling-is-news
   (let [sid (session/mint!)
-        r1  (tu/call! sid "eval" {:code "(__q/sleep 200 :late)" :await 1})
+        r1  (tu/call! sid "eval" {:code "(q/sleep 200 :late)" :await 1})
         id  (tu/id-of r1)]
     (is (str/includes? (tu/text-of r1) "running"))
     @(q/await (registry/task id) 5000)
@@ -151,7 +151,7 @@
 
 (deftest await-reports-without-delivering
   (let [sid (session/mint!)
-        id  (tu/id-of (tu/call! sid "eval" {:code "(__q/sleep 150 :a)" :await 1}))
+        id  (tu/id-of (tu/call! sid "eval" {:code "(q/sleep 150 :a)" :await 1}))
         ra  (tu/call! sid "await" {:all-of [id] :await 5000})]
     (is (str/includes? (tu/text-of ra) ":done"))
     (is (nil? (:touched (registry/entry id)))
@@ -160,7 +160,7 @@
 
 (deftest cancel-delivers-the-ending-it-authors
   (let [sid (session/mint!)
-        id  (tu/id-of (tu/call! sid "eval" {:code "(__q/sleep 60000)" :await 1}))
+        id  (tu/id-of (tu/call! sid "eval" {:code "(q/sleep 60000)" :await 1}))
         rc  (tu/call! sid "cancel" {:ids [id] :await 3000})]
     (is (str/includes? (tu/text-of rc) ":cancelled"))
     (is (= :cancelled (registry/status (registry/task id))))
@@ -202,7 +202,7 @@
 
 (deftest release-period-spares-the-eval-that-speaks-it
   (let [sid (session/mint!)
-        id  (tu/id-of (tu/call! sid "eval" {:code "(__q/sleep 60000)" :await 1}))
+        id  (tu/id-of (tu/call! sid "eval" {:code "(q/sleep 60000)" :await 1}))
         r2  (tu/call! sid "eval" {:code "(__r/release! true)"})]
     (is (false? (tu/tool-error? r2))
       "the release's own eval survives its period")

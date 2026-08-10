@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0 - 2026-08-10
+
+- **Breaking: the `__q` alias is retired.** Scratch namespaces are pre-wired with Quiescent exactly as committed
+  source spells it — the `q` alias plus the bare-referred macros (`q`, `qdo`, `qlet`, `qfor`, …) — and nothing but
+  `__r` follows an eval into other namespaces, so idioms copy verbatim between evals, the Quiescent skill and source
+  files. Eval code written against `__q/…` becomes `q/…` in scratch; in any other namespace, aliasing Quiescent is
+  the model's own act — and `__q` is the collision-proof spelling for a namespace you don't own, since requiring
+  into it rewires its alias map. The upside of the loud failure: `q/task` in a foreign namespace now either means
+  what the host's own alias says, or fails self-diagnosingly, instead of silently meaning something injected.
+- `nses` ranks the way `vars` ranks, adapted to dotted names: names with a whole dot-segment matching exactly
+  first — "outline" puts `x.outline` above `x.outline-test` — then remaining name hits, then docstring-only hits,
+  alphabetical within each tier. Namespace docstrings are searched for the first time; the result stays a flat
+  vector of symbols, so a docstring hit carries no quoted evidence — `outline` the namespace to see it.
+- `outline` takes `:include-private`: the glance keeps privates by default, `{:include-private false}` keeps the
+  public surface alone, for when the API is exactly the question.
+- The manual restructured principles-first — the conceptual model and frame of mind before tools and specifics —
+  and trimmed: mechanics the API docstrings already carry are no longer restated, so the prose half holds the
+  contracts, doctrine and silent-failure modes alone.
+
 ## 0.1.3 - 2026-08-07
 
 - `__r/vars` — global var search, the top-ranked wish from the first in-situ smoke test: every loaded var whose name

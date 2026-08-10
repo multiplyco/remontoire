@@ -4,7 +4,7 @@
    line is its live progress message, and everything printed so far is
    readable mid-run with `(__r/out id)` — and shared state waits, an
    atom the work fills and a later eval reads at its own rhythm."
-  (:require [co.multiply.quiescent :as __q]))
+  (:require [co.multiply.quiescent :as q]))
 
 
 (defn reporting
@@ -22,13 +22,13 @@
 (comment
   ;; Channel one, print: progress rides the output rails for free.
   (qfor [n (range 1000)]
-    (__q/task ((reporting process! "item") n)))
+    (q/task ((reporting process! "item") n)))
 
   ;; Channel two, shared state. One eval launches work that fills an
   ;; atom it defined in scratch …
   (def progress (atom []))
-  (__q/task (doseq [n (range 1000)]
-              (swap! progress conj (process! n))))
+  (q/task (doseq [n (range 1000)]
+            (swap! progress conj (process! n))))
   ;; … and a later eval — same session or another — reads at will,
   ;; while the first eval's id keeps the work itself addressable:
   (count @progress))

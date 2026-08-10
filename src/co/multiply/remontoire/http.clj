@@ -17,7 +17,7 @@
     [co.multiply.remontoire.session :as session]
     [co.multiply.remontoire.tee :as tee])
   (:import
-    [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
+    [com.sun.net.httpserver Headers HttpExchange HttpHandler HttpServer]
     [java.io IOException OutputStream]
     [java.net InetSocketAddress]
     [java.nio.charset StandardCharsets]))
@@ -53,8 +53,8 @@
 
 
 (defn- header
-  [^HttpExchange exchange ^String k]
-  (.getFirst (.getRequestHeaders exchange) k))
+  [exchange ^String k]
+  (Headers/.getFirst (HttpExchange/.getRequestHeaders exchange) k))
 
 
 (defn- session!
@@ -67,12 +67,12 @@
    client initializes before anything else, so a bare request is a broken
    one, and the loud refusal replaced a shared id-less identity that would
    have silently pooled strangers' scratch and claims (2026-08-06, §11)."
-  [^HttpExchange exchange payload]
+  [exchange payload]
   (let [init? (let [im? #(= "initialize" (:method %))]
                 (boolean (if (sequential? payload) (some im? payload) (im? payload))))]
     (if init?
       (let [sid (session/mint!)]
-        (.set (.getResponseHeaders exchange) "Mcp-Session-Id" sid)
+        (Headers/.set (HttpExchange/.getResponseHeaders exchange) "Mcp-Session-Id" sid)
         sid)
       (some-> (header exchange "Mcp-Session-Id") session/seen!))))
 
@@ -114,10 +114,10 @@
   "Heartbeat and message share the stream; the lock keeps frames whole. The
    flush matters twice over: chunked encoding buffers, and an unflushed
    heartbeat neither feeds the client's idle timer nor detects a hangup."
-  [^OutputStream out ^String s]
+  [out ^String s]
   (locking out
-    (.write out (.getBytes s StandardCharsets/UTF_8))
-    (.flush out)))
+    (OutputStream/.write out (String/.getBytes s StandardCharsets/UTF_8))
+    (OutputStream/.flush out)))
 
 
 (defn- beat-frame
@@ -192,11 +192,11 @@
    message, then close, which is the client's cue that the call is done.
    Returns the response when its write went out, nil when the client was
    gone — the caller marks delivery only on the former."
-  [^HttpExchange exchange progress-token sid display compute]
-  (.set (.getResponseHeaders exchange) "Content-Type" sse-content-type)
+  [exchange progress-token sid display compute]
+  (Headers/.set (HttpExchange/.getResponseHeaders exchange) "Content-Type" sse-content-type)
   ;; 0 = chunked: the stream stays open until the exchange closes.
-  (.sendResponseHeaders exchange 200 0)
-  (let [out  (.getResponseBody exchange)
+  (HttpExchange/.sendResponseHeaders exchange 200 0)
+  (let [out  (HttpExchange/.getResponseBody exchange)
         done (promise)]
     (write! out ": open\n\n")
     (heartbeat! out done progress-token sid display)
@@ -233,16 +233,16 @@
 
 
 (defn- respond!
-  [^HttpExchange exchange status content-type ^String body]
-  (let [bytes (when body (.getBytes body StandardCharsets/UTF_8))]
+  [exchange status content-type ^String body]
+  (let [bytes (when body (String/.getBytes body StandardCharsets/UTF_8))]
     (when content-type
-      (.set (.getResponseHeaders exchange) "Content-Type" content-type))
+      (Headers/.set (HttpExchange/.getResponseHeaders exchange) "Content-Type" content-type))
     ;; -1 means "no body"; 0 would mean chunked, which is how respond-sse!
     ;; holds its stream open.
-    (.sendResponseHeaders exchange status (if bytes (alength bytes) -1))
+    (HttpExchange/.sendResponseHeaders exchange status (if bytes (alength bytes) -1))
     (when bytes
-      (with-open [out (.getResponseBody exchange)]
-        (.write out bytes)))))
+      (with-open [out (HttpExchange/.getResponseBody exchange)]
+        (OutputStream/.write out bytes)))))
 
 
 (defn- serve!
@@ -250,15 +250,16 @@
    the client accepts it and the payload waits (`tools/call`), plain JSON
    otherwise. Either way, delivery marks land only after the write that
    carried them went out (§5)."
-  [^HttpExchange exchange]
-  (let [payload (json/read-str (slurp (.getRequestBody exchange)
+  [exchange]
+  (let [payload (json/read-str (slurp (HttpExchange/.getRequestBody exchange)
                                  :encoding "UTF-8")
                   :key-fn keyword)
         sid     (session! exchange payload)
         ;; getHostString, not getAddress: the string form without a reverse
         ;; DNS lookup. The port is ephemeral and omitted — tailnet addresses
         ;; are stable per device (§4), the host is the identity.
-        ctx     {:peer    (.getHostString (.getRemoteAddress exchange))
+        ctx     {:peer    (InetSocketAddress/.getHostString
+                            (HttpExchange/.getRemoteAddress exchange))
                  :session sid}]
     (cond
       (nil? sid)
@@ -286,7 +287,7 @@
 
 
 (defn- handle-exchange!
-  [^HttpExchange exchange allowed-origins]
+  [exchange allowed-origins]
   (try
     (cond
       (not (origin-allowed? exchange allowed-origins))
@@ -298,13 +299,13 @@
       ;; than at expiry (§11). GET — the client offering to open a
       ;; server-initiated stream this transport does not speak (§4) —
       ;; falls through to the 405 below, which it tolerates.
-      (= "DELETE" (.getRequestMethod exchange))
+      (= "DELETE" (HttpExchange/.getRequestMethod exchange))
       (if-let [sid (header exchange "Mcp-Session-Id")]
         (do (registry/release-session! sid)
           (respond! exchange 204 nil nil))
         (respond! exchange 400 "text/plain" "Mcp-Session-Id required"))
 
-      (not= "POST" (.getRequestMethod exchange))
+      (not= "POST" (HttpExchange/.getRequestMethod exchange))
       (respond! exchange 405 "text/plain" "Method not allowed")
 
       :else (serve! exchange))
@@ -313,9 +314,9 @@
         (encode {:jsonrpc "2.0"
                  :id      nil
                  :error   {:code    -32700
-                           :message (str (.getName (class t)) ": " (ex-message t))}})))
+                           :message (str (Class/.getName (class t)) ": " (ex-message t))}})))
     (finally
-      (.close exchange))))
+      (HttpExchange/.close exchange))))
 
 
 (defn- handle-probe!
@@ -326,19 +327,19 @@
    sessions, polluting exactly the surface built for tenant mutual
    awareness (§11). Same origin policy as `/mcp`; GET only, the whole
    point being a curl-friendly read."
-  [^HttpExchange exchange allowed-origins]
+  [exchange allowed-origins]
   (try
     (cond
       (not (origin-allowed? exchange allowed-origins))
       (respond! exchange 403 "text/plain" "Forbidden origin")
 
-      (not= "GET" (.getRequestMethod exchange))
+      (not= "GET" (HttpExchange/.getRequestMethod exchange))
       (respond! exchange 405 "text/plain" "Method not allowed")
 
       :else
       (respond! exchange 200 json-content-type (encode (mcp/probe))))
     (finally
-      (.close exchange))))
+      (HttpExchange/.close exchange))))
 
 
 (defn- handler
@@ -357,19 +358,19 @@
   "Bind and start. Returns the HttpServer."
   ^HttpServer [{:keys [port bind allowed-origins]}]
   (doto (HttpServer/create (InetSocketAddress. ^String bind (int port)) 0)
-    (.createContext "/mcp" (handler #'handle-exchange!
-                             {:allowed-origins (set allowed-origins)}))
-    (.createContext "/probe" (handler #'handle-probe!
-                               {:allowed-origins (set allowed-origins)}))
+    (HttpServer/.createContext "/mcp" (handler #'handle-exchange!
+                                        {:allowed-origins (set allowed-origins)}))
+    (HttpServer/.createContext "/probe" (handler #'handle-probe!
+                                          {:allowed-origins (set allowed-origins)}))
     ;; The default executor runs every exchange serially on the dispatch
     ;; thread, which deadlocks on the second connection. Quiescent's own
     ;; executor rather than a fresh virtual one: handler threads then carry
     ;; the same classloader as every task thread, and a task constructed in
     ;; a handler is rooted, since the handler is not itself a task.
-    (.setExecutor q.exec/virtual-executor)
-    (.start)))
+    (HttpServer/.setExecutor q.exec/virtual-executor)
+    (HttpServer/.start)))
 
 
 (defn stop!
-  [^HttpServer server]
-  (.stop server 0))
+  [server]
+  (HttpServer/.stop server 0))

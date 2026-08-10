@@ -124,7 +124,7 @@
 
 (defn- type-sym
   [e]
-  (symbol (.getName (class e))))
+  (symbol (Class/.getName (class e))))
 
 
 (defn trace

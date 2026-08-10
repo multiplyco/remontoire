@@ -37,6 +37,6 @@
   (let [f      (sc/scoping [tee/*bank* :marked]
                  (api/scoped-fn (fn [] (sc/ask tee/*bank* nil))))
         result (promise)]
-    (.start (Thread. ^Runnable (fn [] (deliver result (f)))))
+    (Thread/.start (Thread. ^Runnable (fn [] (deliver result (f)))))
     (is (= :marked (deref result 2000 :timeout))
       "the captured scope re-establishes on a raw thread")))

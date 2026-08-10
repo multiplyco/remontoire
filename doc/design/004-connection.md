@@ -164,6 +164,21 @@ eval(code, ns, await) → {:id :value :out :error :status}
       `__q` arrived and the taught idiom `(__q/catch (__q/task :fine) identity)` ran there; the served instructions
       carry the reasoning; patterns re-verified running under the new spelling. Transitional ghosts accepted:
       namespaces that received the old fill-when-free `q` keep it until restart.
+    - **The rail narrowed to `__r` alone, 2026-08-10 — Quiescent is an ordinary library again.** A third in-situ
+      smoke tenant, asked what in the manual was tangential, put its finger on the `__q`/`q` split itself: every
+      idiom crossing between the Quiescent skill, host source and eval code paid a transcription step, and each
+      transcription step is a class of small bugs in both directions. Scratch keeps the committed-source spelling —
+      `:as q` plus the bare refers, the 2026-08-05 morning shape — and nothing but `__r` is injected into visited
+      namespaces. The distinction from the fill-when-free `q` that failed on 08-05 morning: that design injected a
+      *conditional* meaning into namespaces the model walked into; a scratch-only `q` is unconditional within the
+      one namespace the session owns and absent everywhere else. Moving to a foreign namespace and writing `q/task`
+      either means what the host's own alias says — canonical, correct — or fails loudly (`No such namespace: q`)
+      as the model's own omission: one self-diagnosing roundtrip, where the `__q` injection was a permanent
+      per-eval tax spent preventing exactly that error. The residue is advice, not machinery (manual): alias
+      Quiescent `__q` in a namespace you don't own — requiring into a host namespace rewires its alias map, and
+      the dunder is the collision-proof spelling of that act. Teachings swept back: the eval description, api
+      docstrings, the manual, and the pattern namespaces — which again speak `q`, now truthfully "exactly as
+      committed source does".
     - **The scratch dies with its session** (`session/drop!`, so both the expiry reap and the DELETE goodbye reach
       it): conversational state, same rule as the sticky namespace. An eval somehow still running there when its
       session expires fails loudly at its next form (`No namespace`) rather than working on in a ghost — accepted

@@ -4,19 +4,19 @@
    Takes a parsed request map, returns a response map. No I/O and no transport
    concerns — which is what makes it testable without a socket."
   (:require [clojure.string :as str]
-    [co.multiply.quiescent :as q]
-    [co.multiply.remontoire.evaluate :as evaluate]
-    [co.multiply.remontoire.exception :as exception]
+            [co.multiply.quiescent :as q]
+            [co.multiply.remontoire.evaluate :as evaluate]
+            [co.multiply.remontoire.exception :as exception]
     ;; Not called from anywhere: loaded so the pattern namespaces exist
     ;; for the drilldown — `(__r/nses "patterns")` is their index.
-    [co.multiply.remontoire.patterns]
-    [co.multiply.remontoire.registry :as registry]
-    [co.multiply.remontoire.session :as session]
-    [co.multiply.remontoire.tee :as tee]))
+            [co.multiply.remontoire.patterns]
+            [co.multiply.remontoire.registry :as registry]
+            [co.multiply.remontoire.session :as session]
+            [co.multiply.remontoire.tee :as tee]))
 
 
 (def ^:private server-info
-  {:name "Remontoire" :version "0.1.3"})
+  {:name "Remontoire" :version "0.2.0"})
 
 
 (def ^:private await-ms
@@ -183,9 +183,9 @@
     (when-let [[n exact] truncated]
       (str "\n;; truncated — "
         (cond
-          exact    (str n " elided")
+          exact (str n " elided")
           (pos? n) (str "at least " n " elided")
-          :else    "uncounted elision")
+          :else "uncounted elision")
         " · (res " id ") is the whole value"))
     (when (seq settled) (str "\n" (news-line settled)))
     (when (seq evicted)
@@ -389,7 +389,7 @@
                    "bounded. Tasks "
                    "spawned but not returned are children and are cancelled by the time "
                    "the eval settles — silently. Work that must outlive the call needs "
-                   "`(__q/compel (__q/task …))`, or better: let the eval itself be the "
+                   "`(q/compel (q/task …))`, or better: let the eval itself be the "
                    "long-running work and use its id.\n\n"
                    "Printed output — `*err*` included, interleaved — is captured per "
                    "eval, attributed across its whole "
@@ -440,7 +440,7 @@
    {:name        "cancel"
     :description (str "Cancel evals by id, then report where each stands.\n\n"
                    "Sends `q/cancel` to every entry in `ids` — the wire-level "
-                   "counterpart of `(__q/cancel (res 12))`, without spending a registry "
+                   "counterpart of `(q/cancel (res 12))`, without spending a registry "
                    "entry to say it. Cancellation is cooperative: a pure task tree "
                    "stops promptly, but a JVM call already in flight stops at its next "
                    "check, so the call waits up to `await` (default 2000 ms, clamped "
@@ -559,9 +559,8 @@
     " — not a sandbox. Prefer it for navigating and reading Clojure — "
     "namespaces, signatures, var lookups, docstrings, source, live data — where it is "
     "faster and more precise than file search, as well as for evaluating "
-    "code. Its async semantics will silently surprise you: before your "
-    "first eval, run `(__r/manual)`, unless you've already read it in this "
-    "conversation."))
+    "code. It uses async semantics: in your first eval, run `(__r/manual)`, "
+    "unless you've already read it in this conversation."))
 
 
 (defmethod handle "initialize" [{:keys [id params] ::keys [ctx]}]
@@ -638,7 +637,7 @@
             (with-meta response {::delivered mark!})
             response))
         (catch Throwable t
-          (result id {:content (text (str (.getName (class t)) ": " (ex-message t)))
+          (result id {:content (text (str (Class/.getName (class t)) ": " (ex-message t)))
                       :isError true})))
       (error id -32602 (str "Unknown tool: " tool-name)))))
 

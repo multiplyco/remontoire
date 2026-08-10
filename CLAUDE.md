@@ -1,5 +1,9 @@
 # Remontoire — working notes for Claude
 
+## Style notes
+
+Prefer method values for Java interop. `(Class/.method …)` over `(.method ^Class …)`.
+
 ## Cutting a release
 
 The version lives in **four places**, kept in sync by hand; `bb version:check` is the gate (and `bb deploy`
