@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `vars` exactness reads through conventional decoration: `claim?`, `->Claim` and `*claim*` are exact
+  matches for "claim". The affix set is closed idiom — one leading `map->`/`->`/`-`, one trailing
+  `?`/`!`/`*`, earmuffs as a pair — and exactness as spelled still leads the tier: `claim` itself, or a
+  query spelling the sigil, ranks above the decorated family.
+- Within each tier, publics rank before privates — the API is usually the quarry, and the private sibling
+  follows one row down, still flagged. A bare scope listing (`"helpers/"`) keeps whole-namespace source
+  order: a listing, not a ranking.
+
 ## 0.4.0 - 2026-08-11
 
 - **Breaking: `vars` speaks qualified matches; `:ns-match` is gone.** A `/` in the match qualifies it,

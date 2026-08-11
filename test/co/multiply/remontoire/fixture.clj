@@ -43,3 +43,48 @@
 
 (defmethod poly :a [_] :a)
 (defmethod poly :b [_] :b)
+
+;; The sigil family: one stem under each conventional decoration, the
+;; undecorated stem deliberately last — only ranking, never source
+;; order, can put it first. The impl/run pair reverses source order
+;; against publicness for the same reason.
+
+(def ^:dynamic *gadget*
+  "An earmuffed relative."
+  nil)
+
+
+(defn- gadget-impl
+  "A helper, defined before the sibling it serves."
+  [x]
+  x)
+
+
+(defn gadget-run
+  "The exported sibling, defined after its helper."
+  [x]
+  x)
+
+
+(defn gadget?
+  "A predicate."
+  [x]
+  (boolean x))
+
+
+(defn ->gadget
+  "A constructor."
+  [x]
+  {:x x})
+
+
+(defn map->gadget
+  "A map constructor."
+  [m]
+  m)
+
+
+(defn gadget
+  "The undecorated stem."
+  []
+  :gadget)

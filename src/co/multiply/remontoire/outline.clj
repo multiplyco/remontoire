@@ -70,6 +70,26 @@
     #(boolean (re-matches p %))))
 
 
+(defn- stem
+  "The name under its conventional decoration: one leading `map->`, `->`
+   or `-`, one trailing `?`, `!` or `*`, or earmuffs as a pair, stripped —
+   `claim?`, `->Claim` and `*claim*` all stem to claim. The affix set is
+   closed idiom, not a heuristic; what it admits to the exact tier sits
+   one rung below exactness as spelled."
+  [n]
+  (let [n (cond
+            (and (< 2 (count n)) (str/starts-with? n "*") (str/ends-with? n "*"))
+            (subs n 1 (dec (count n)))
+
+            (and (< 5 (count n)) (str/starts-with? n "map->")) (subs n 5)
+            (and (< 2 (count n)) (str/starts-with? n "->")) (subs n 2)
+            (and (< 1 (count n)) (str/starts-with? n "-")) (subs n 1)
+            :else n)]
+    (if (and (< 1 (count n)) (#{\? \! \*} (nth n (dec (count n)))))
+      (subs n 0 (dec (count n)))
+      n)))
+
+
 (defn- dispatches
   "Dispatch values when `v` holds a multimethod. `defmethod` defines no
    var, so without this a namespace that is mostly methods outlines as one
@@ -209,9 +229,15 @@
    namespaces — the entry point for \"where does that function live?\",
    where `nses` searches namespace names and `outline` reads one
    namespace at a time. Hits are outline entries with `:ns` attached,
-   scored: exact name matches first, then name hits, then docstring-only
-   hits — the definition asked for outranks a mention of it — and
-   namespace-then-source-line order within each tier. Docstring hits
+   scored: exact name matches first — a conventionally decorated name is
+   exact too, `claim?`, `->Claim` and `*claim*` all meet \"claim\" at the
+   exact tier, one rung below exactness as spelled (see `stem`) — then
+   name hits, then docstring-only hits: the definition asked for
+   outranks a mention of it. Within each tier, namespace order, publics
+   before privates — the API is usually the quarry, and the private
+   sibling follows still flagged — then source line. A bare scope
+   listing (\"helpers/\") keeps whole-namespace source order instead: a
+   listing, not a ranking. Docstring hits
    quote their matching lines as `:matched`, the same evidence `outline`
    shows. `match` is required — the JVM's whole var population is no
    glance — and takes what `nses` takes: a string (case-insensitive
@@ -250,8 +276,15 @@
          tier     (fn [e]
                     (if-not hit
                       0
-                      (let [n (subject e)]
-                        (cond (exact n) 0 (hit n) 1 :else 2))))]
+                      (let [n (subject e)
+                            s (if qregex?
+                                (str (:ns e) "/" (stem (str (:name e))))
+                                (stem n))]
+                        (cond
+                          (exact n) 0
+                          (exact s) 1
+                          (hit n)   2
+                          :else     3))))]
      (->> (if nsp
             (keep find-ns (nses nsp {:search-docstrings false}))
             (all-ns))
@@ -261,7 +294,12 @@
                                   hit)]
                    (map #(into {:ns (ns-name ns)} %)
                      (keep #(entry % false name-hit doc-hit) (vals (ns-interns ns)))))))
-       (sort-by (fn [e] [(tier e) (:ns e) (or (:line e) Long/MAX_VALUE)]))
+       (sort-by (fn [e] [(tier e)
+                         (:ns e)
+                         ;; Publics first only under a name side: a bare
+                         ;; scope listing is a listing, not a ranking.
+                         (if (and hit (:private e)) 1 0)
+                         (or (:line e) Long/MAX_VALUE)]))
        (into [])))))
 
 

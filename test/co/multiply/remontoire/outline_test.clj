@@ -117,9 +117,11 @@
   (is (= (outline/vars "frobnitz") (outline/vars "/frobnitz"))
     "an empty ns side degenerates to the bare search")
   (let [hits (outline/vars "co.multiply.remontoire.fixture/")]
-    (is (= '[plain-value hidden *knob* public-fn private-fn public-macro poly]
+    (is (= '[plain-value hidden *knob* public-fn private-fn public-macro poly
+             *gadget* gadget-impl gadget-run gadget? ->gadget map->gadget gadget]
           (mapv :name hits))
-      "an empty name side lists the scope whole, in source order")
+      "an empty name side lists the scope whole, in source order —
+       a listing, not a ranking, so privates keep their place")
     (is (not-any? :matched hits) "no name match, no quoted evidence")))
 
 
@@ -167,12 +169,26 @@
     "a starred miss is still a miss"))
 
 
+(deftest vars-ranks-sigils-and-publics
+  (is (= '[gadget *gadget* gadget? ->gadget map->gadget gadget-run gadget-impl]
+        (mapv :name (outline/vars "fixture/gadget")))
+    "exactness as spelled leads; decorated exactness — earmuffs, ?, ->,
+     map-> — follows in source order; name hits close, publics before
+     privates whatever the source order says")
+  (is (= 'gadget? (:name (first (outline/vars "fixture/gadget?"))))
+    "a query spelling the sigil is exact as spelled")
+  (is (= '[gadget *gadget* gadget? ->gadget map->gadget gadget-run gadget-impl]
+        (mapv :name (outline/vars "fixture/gad*et")))
+    "glob exactness reads through the decoration the same way"))
+
+
 (deftest outline-is-the-namespace-at-a-glance
   (let [o       (outline/outline 'co.multiply.remontoire.fixture)
         by-name (into {} (map (juxt :name identity)) (:vars o))]
     (is (= 'co.multiply.remontoire.fixture (:ns o)))
     (is (string? (:doc o)))
-    (is (= '[plain-value hidden *knob* public-fn private-fn public-macro poly]
+    (is (= '[plain-value hidden *knob* public-fn private-fn public-macro poly
+             *gadget* gadget-impl gadget-run gadget? ->gadget map->gadget gadget]
           (mapv :name (:vars o)))
       "source order, privates included")
     (is (true? (:private (by-name 'hidden))))
@@ -200,7 +216,8 @@
   (let [pub (outline/outline 'co.multiply.remontoire.fixture
               {:include-private false})]
     (is (not-any? :private (:vars pub)) "the public surface alone on request")
-    (is (= '[plain-value *knob* public-fn public-macro poly]
+    (is (= '[plain-value *knob* public-fn public-macro poly
+             *gadget* gadget-run gadget? ->gadget map->gadget gadget]
           (mapv :name (:vars pub)))
       "everything else survives the filter, order untouched")))
 

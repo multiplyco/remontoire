@@ -16,7 +16,8 @@ otherwise. That one property sets the frame of mind:
   future; all auto-converted) extends the eval's lifetime: the eval settles when it does, and its result is what the
   task contained, not the task itself.
 
-Remontoire is built on [Quiescent](https://github.com/multiplyco/quiescent), a structured concurrency library.
+Remontoire is built on [Quiescent](https://github.com/multiplyco/quiescent), a structured concurrency library. Load the
+Quiescent skill now[^1].
 
 ## Your toolkit
 
@@ -26,8 +27,6 @@ Your evals start in a scratch namespace of your session's own, and its wiring is
   its reference. `__r` is the one alias that follows your evals into every namespace they touch.
 - `q`: the Quiescent public API, plus its macros referred bare (`qlet`, `qdo`, `qfor`, …) — exactly the spelling
   committed user code uses. This wiring is scratch's own: in any other namespace, requiring Quiescent is yours to do.
-
-Load the Quiescent skill now (skip this directive only if you don't have the skill available).
 
 Quiescent is a namespace like any other: `(__r/outline 'co.multiply.quiescent {:include-private false})` shows the API
 that Quiescent exposes, or you can find information about specific concepts with eg.
@@ -70,11 +69,11 @@ separately, so parallel tasks interleave mid-line — from concurrent work, prin
 
 The system is read by drilling down: `(__r/nses)` lists the loaded namespaces, `(__r/outline 'some.ns)` reads one —
 signatures at a glance, docstrings and search via its options — `doc` and `source` read single vars, and `file` reads a
-whole source file as lines, sliceable by the `:line` an outline entry carries. When the namespace is the unknown —
-where does that function live? — `(__r/vars "await")` searches every loaded var by name and docstring, and the query is
+whole source file as lines, sliceable by the `:line` an outline entry carries. When the namespace is the unknown — where
+does that function live? — `(__r/vars "await")` searches every loaded var by name and docstring, and the query is
 spelled the way Clojure spells the target: `(__r/vars "helpers/await")` scopes to matching namespaces, `"helpers/"`
-lists a scope whole, `*` is a wildcard, and a regex containing `/` matches fully qualified names. All of these
-return plain data — `vars` scored, best hits first — so a large result is a collection like any other: `take`, `drop`,
+lists a scope whole, `*` is a wildcard, and a regex containing `/` matches fully qualified names. All of these return
+plain data — `vars` scored, best hits first — so a large result is a collection like any other: `take`, `drop`,
 `filter`, whatever idiom builds the narrowing or pagination the search calls for. Recipes for the common async shapes —
 cleanup, deadlines, partial results, integrations, work that outlives its eval, bounded fan-out, repeating work — are
 loaded pattern namespaces: `(__r/nses "patterns")` is the index, `outline` and `file` read them.
@@ -99,3 +98,5 @@ Hygiene worth starting from: work from scratch and reach into the system by qual
 reads and calls even privates — leaving host namespaces as your visit found them. Moving in with `in-ns`, or requiring
 and `def`-ing into a namespace others own, is sometimes exactly what the job needs; it just rarely needs to be the
 opening move.
+
+[^1]: `__r/outline` on the `co.multiply.quiescent` will serve if the Quiescent skill is unavailable.

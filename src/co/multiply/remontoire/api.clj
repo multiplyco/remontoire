@@ -231,8 +231,9 @@
 
    Accepts:
    - `match`: String or Symbol (case-insensitive, can be partial, `*` a wildcard),
-              or regex. Exact matches first, then name hits, then docstring-only
-              hits, in namespace and source order within each tier.
+              or regex. Exact-as-spelled first, after which `var?`, `->Var`, `*var*`
+              are exact for \"var\", then name hits, then docstring-only hits.
+              Within tiers: namespace, publics before privates, source line.
    - `opts`: {:search-docstrings false} ; names only, default `true`.
 
    Matches vars in loaded namespaces, live in the system.
