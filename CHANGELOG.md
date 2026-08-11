@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-08-11
 
 - `vars` exactness reads through conventional decoration: `claim?`, `->Claim` and `*claim*` are exact
   matches for "claim". The affix set is closed idiom — one leading `map->`/`->`/`-`, one trailing
