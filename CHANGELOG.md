@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking: `vars` speaks qualified matches; `:ns-match` is gone.** A `/` in the match qualifies it,
+  spelling the search the way Clojure spells the target: `(vars "helpers/await")` — string or symbol —
+  scopes to namespaces whose *name* matches the ns side (docstrings not consulted, as `:ns-match` scoped)
+  and matches the name side within them, docstrings included as ever. Either side may be empty:
+  `"helpers/"` lists a scope whole, `"/await"` degenerates to the bare search. `"/"` and strings with more
+  than one `/` throw — the var named `/` is reached as `'clojure.core//`, split by the reader. A regex
+  containing `/` matches whole qualified names — the one spelling that mixes forms — where a slashless
+  regex matches bare names, unchanged. The qualified spelling was previously a silent `[]`: the natural
+  first query, answered as "no such var".
+- `vars` takes `{:search-docstrings false}` — `nses`' word — restricting the name side to names alone.
+- `*` in a string or symbol match is a wildcard matching any run, in `nses`, `vars` and `outline`'s
+  `:match` alike — `"q*/await"`, `"co.*.helpers/"`. A starless match stays a plain substring; a literal
+  `*` (earmuffed names) is a regex away: `#"\*out\*"`.
+
 ## 0.3.0 - 2026-08-11
 
 - **Breaking: `file` returns the vector of lines**, like `out` before it — composition is the window. The

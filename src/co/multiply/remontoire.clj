@@ -88,7 +88,7 @@
   (stop!)
 
   (filterv #(-> % :private not) (:vars (__r/outline 'co.multiply.quiescent)))
-  (co.multiply.remontoire.api/vars 'capacity! {:ns-match 'clojure})
+  (co.multiply.remontoire.api/vars 'capacity!)
   (co.multiply.remontoire.api/file 'co.multiply.remontoire.api)
 
   :-)

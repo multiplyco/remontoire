@@ -71,7 +71,9 @@ separately, so parallel tasks interleave mid-line — from concurrent work, prin
 The system is read by drilling down: `(__r/nses)` lists the loaded namespaces, `(__r/outline 'some.ns)` reads one —
 signatures at a glance, docstrings and search via its options — `doc` and `source` read single vars, and `file` reads a
 whole source file as lines, sliceable by the `:line` an outline entry carries. When the namespace is the unknown —
-where does that function live? — `(__r/vars "name")` searches every loaded var by name and docstring. All of these
+where does that function live? — `(__r/vars "await")` searches every loaded var by name and docstring, and the query is
+spelled the way Clojure spells the target: `(__r/vars "helpers/await")` scopes to matching namespaces, `"helpers/"`
+lists a scope whole, `*` is a wildcard, and a regex containing `/` matches fully qualified names. All of these
 return plain data — `vars` scored, best hits first — so a large result is a collection like any other: `take`, `drop`,
 `filter`, whatever idiom builds the narrowing or pagination the search calls for. Recipes for the common async shapes —
 cleanup, deadlines, partial results, integrations, work that outlives its eval, bounded fan-out, repeating work — are

@@ -210,9 +210,9 @@
   "Browse all loaded namespaces.
 
    Accepts:
-   - `match`: String or Symbol (both case-insensitive, can be partial), or regex.
-              Exact whole-segment matches first, then name hits, then docstring-only
-              hits. Alphabetical within each tier.
+   - `match`: String or Symbol (both case-insensitive, can be partial, `*` a
+              wildcard), or regex. Exact whole-segment matches first, then name
+              hits, then docstring-only hits. Alphabetical within each tier.
    - `opts`: {:search-docstrings false} ; names only, default `true`.
 
    Returns loaded namespaces only, live in the system.
@@ -225,15 +225,26 @@
 
 
 (defn vars
-  "Global var search — \"where does that function live?\".
+  "Global var search — \"where does that function live?\". Where `grep` guesses
+   paths over the repo's text, this reads the JVM: every loaded namespace,
+   dependency jars included, current after hot reloads.
 
    Accepts:
-   - `match`: String or Symbol (case-insensitive, can be partial), or regex.
-              Exact matches first, then name hits, then docstring-only hits,
-              in namespace and source order within each tier.
-   - `opts`: {:ns-match <match>} ; As per `nses`, excluding ns docstring matches.
+   - `match`: String or Symbol (case-insensitive, can be partial, `*` a wildcard),
+              or regex. Exact matches first, then name hits, then docstring-only
+              hits, in namespace and source order within each tier.
+   - `opts`: {:search-docstrings false} ; names only, default `true`.
 
    Matches vars in loaded namespaces, live in the system.
+
+   Examples:
+   - `(__r/vars 'await)`: Anything containing \"await\"
+   - `(__r/vars 'helpers/await)`: Scope to the \"helpers\" ns partial
+   - `(__r/vars \"module*impl/handle*user\")`: Globs allow gaps in the matches
+   - `(__r/vars \"module/\")`: All vars under any ns containing \"module\"
+   - `(__r/vars #\"handle-\\w+\")`: Regex on the name
+   - `(__r/vars #\"helpers[^/]*/await\")`: A regex with a `/` matches the whole
+     qualified name
 
    Output shape:
    [{:ns         Symbol

@@ -35,21 +35,39 @@
                    {:designator x}))))
 
 
+(defn- pattern-of
+  "The pattern a string or symbol match compiles to: case-insensitive,
+   the text literal except `*`, a gap matching any run — glob spelling,
+   `\"pu*-fn\"` finds `public-fn`. A starless match stays a plain
+   substring; a literal `*` (earmuffed names) is a regex away."
+  [s]
+  (re-pattern (str "(?i)" (str/join ".*" (map #(Pattern/quote %) (str/split s #"\*" -1))))))
+
+
 (defn- matcher
   "A predicate over strings from `match`: a regex as given, a string as a
-   case-insensitive substring, or a symbol matched as its name — models
-   write \"evict\" as readily as #\"evict\" or 'evict, and all three
-   should work."
+   case-insensitive substring with `*` a gap, or a symbol matched as its
+   name — models write \"evict\" as readily as #\"evict\" or 'evict, and
+   all three should work."
   [match]
   (cond
     (nil? match) nil
     (instance? Pattern match) #(re-find match %)
     (or (string? match) (symbol? match))
-    (let [p (re-pattern (str "(?i)" (Pattern/quote (str match))))]
+    (let [p (pattern-of (str match))]
       #(re-find p %))
     :else (throw (ex-info (str ":match takes a string, a symbol or a regex, not "
                             (pr-str match))
                    {:match match}))))
+
+
+(defn- exactly
+  "The whole-string counterpart of `matcher`'s predicate: `m` — a string
+   or a pattern — must cover all of its input, which is what admits a hit
+   to the exact tier."
+  [m]
+  (let [p (if (string? m) (pattern-of m) m)]
+    #(boolean (re-matches p %))))
 
 
 (defn- dispatches
@@ -73,16 +91,17 @@
 
 
 (defn- entry
-  "One outline entry for var `v` under `hit` (nil = keep everything).
-   Returns nil when `hit` matches neither name nor docstring. A docstring
-   hit in bare mode quotes its matching lines as `:matched` — the answer
-   shows its evidence, the way grep shows the line and not just the file."
-  [v include-docstrings? hit]
+  "One outline entry for var `v` under `name-hit` and `doc-hit` — nil
+   meaning keep every name, search no docstring, respectively. Returns
+   nil when neither matches. A docstring hit in bare mode quotes its
+   matching lines as `:matched` — the answer shows its evidence, the way
+   grep shows the line and not just the file."
+  [v include-docstrings? name-hit doc-hit]
   (let [{:keys [name arglists doc line macro private dynamic]} (meta v)
-        doc-hits (when (and hit doc)
-                   (into [] (comp (filter hit) (map str/trim))
+        doc-hits (when (and doc-hit doc)
+                   (into [] (comp (filter doc-hit) (map str/trim))
                      (str/split-lines doc)))]
-    (when (or (nil? hit) (hit (str name)) (seq doc-hits))
+    (when (or (nil? name-hit) (name-hit (str name)) (seq doc-hits))
       (let [multi (dispatches v)]
         (cond-> {:name name}
           arglists (assoc :arglists arglists)
@@ -119,17 +138,17 @@
 
 (defn nses
   "Every loaded namespace — the system at a glance, and the top of the
-   drilldown that `outline` continues. `match` (a string, a regex, or a
-   symbol matched as its name, as everywhere) searches names and
-   namespace docstrings, ranked the way `vars` ranks: names with a whole
-   dot-segment matching exactly first — \"outline\" puts `x.outline`
-   above `x.outline-test` — then remaining name hits, then
+   drilldown that `outline` continues. `match` (a string — `*` a gap — a
+   regex, or a symbol matched as its name, as everywhere) searches names
+   and namespace docstrings, ranked the way `vars` ranks: names with a
+   whole dot-segment matching exactly first — \"outline\" puts
+   `x.outline` above `x.outline-test` — then remaining name hits, then
    docstring-only hits, alphabetical within each tier; so
    `(nses 'some.ns)` still answers whether a namespace is really loaded.
    Without `match`, all of them, sorted. `{:search-docstrings false}`
    restricts the search to names — the third tier vanishes; it is how
-   `vars` scopes by `:ns-match`, where a docstring mention would be a
-   surprising reason to widen a scope. Names only in the output,
+   `vars` scopes a qualified match's ns side, where a docstring mention
+   would be a surprising reason to widen a scope. Names only in the output,
    deliberately: a flat vector of symbols is the composable form —
    filter it, count it, map `outline` over it — which means a docstring
    hit carries no quoted evidence; `outline` the namespace to see it.
@@ -142,9 +161,7 @@
          hit (matcher m)]
      (if-not hit
        (into [] (sort (map ns-name (all-ns))))
-       (let [exact (if (string? m)
-                     #(String/.equalsIgnoreCase m %)
-                     #(boolean (re-matches m %)))
+       (let [exact (exactly m)
              tier  (fn [ns]
                      (let [n (str (ns-name ns))]
                        (cond
@@ -159,40 +176,91 @@
            (mapv second)))))))
 
 
+(defn- qualified
+  "The `[ns-side name-side]` a qualified match splits into, nil when
+   `match` has no `/`. Symbols arrive split by the reader — the one
+   spelling that reaches the var named `/`, 'clojure.core// — while
+   strings split at their single `/`: more than one is ambiguous and
+   throws, as does \"/\" alone, which scopes nothing on either side."
+  [match]
+  (if (symbol? match)
+    (when-let [nsp (namespace match)]
+      (let [np (name match)]
+        (when (or (str/includes? nsp "/")
+                (and (not= "/" np) (str/includes? np "/")))
+          (throw (IllegalArgumentException.
+                   (str "More than one / in " match))))
+        [nsp np]))
+    (when-let [i (str/index-of match "/")]
+      (let [nsp (subs match 0 i)
+            np  (subs match (inc i))]
+        (when (str/includes? np "/")
+          (throw (IllegalArgumentException.
+                   (str "More than one / in " (pr-str match)
+                     " — the var named / is reached as a symbol: 'clojure.core//"))))
+        (when (= "/" match)
+          (throw (IllegalArgumentException.
+                   "\"/\" scopes nothing on either side — give an ns side, a name side, or both")))
+        [nsp np]))))
+
+
 (defn vars
   "Every loaded var whose name or docstring matches, across all
    namespaces — the entry point for \"where does that function live?\",
    where `nses` searches namespace names and `outline` reads one
    namespace at a time. Hits are outline entries with `:ns` attached,
-   scored: vars named exactly `match` first, then name hits, then
-   docstring-only hits — the definition asked for outranks a mention of
-   it — and namespace-then-source-line order within each tier. Docstring
-   hits quote their matching lines as `:matched`, the same evidence
-   `outline` shows. `match` is required — the JVM's whole var population
-   is no glance — and takes what `nses` takes: a string
-   (case-insensitive substring), a regex, or a symbol matched as its
-   name. `{:ns-match m}` scopes the search to the namespaces whose
-   *names* `m` matches — same forms as `match`, docstrings not
-   consulted: a scope widened by a docstring mention would surprise."
+   scored: exact name matches first, then name hits, then docstring-only
+   hits — the definition asked for outranks a mention of it — and
+   namespace-then-source-line order within each tier. Docstring hits
+   quote their matching lines as `:matched`, the same evidence `outline`
+   shows. `match` is required — the JVM's whole var population is no
+   glance — and takes what `nses` takes: a string (case-insensitive
+   substring, `*` a gap), a regex, or a symbol matched as its name. A
+   `/` qualifies the match, spelling the search the way Clojure spells
+   the target: \"helpers/await\" — string or symbol — scopes to the
+   namespaces whose *name* matches the ns side (docstrings not
+   consulted: a scope widened by a docstring mention would surprise) and
+   matches the name side within them, docstrings included as ever.
+   Either side may be empty — \"helpers/\" lists a scope whole,
+   \"/await\" degenerates to the bare search. A regex containing `/`
+   instead matches whole qualified names, #\"helpers[^/]*/await\" — the
+   one spelling that mixes forms — where a slashless regex matches bare
+   names. `{:search-docstrings false}` restricts the name side to names
+   alone — the docstring tier vanishes."
   ([match]
    (vars match nil))
-  ([match {:keys [ns-match]}]
-   (let [m     (if (symbol? match) (str match) match)
-         hit   (or (matcher m)
-                 (throw (ex-info "vars searches: match with a string, a regex or a symbol"
-                          {:match match})))
-         exact (if (string? m)
-                 #(String/.equalsIgnoreCase m %)
-                 #(boolean (re-matches m %)))
-         tier  (fn [e]
-                 (let [n (str (:name e))]
-                   (cond (exact n) 0 (hit n) 1 :else 2)))]
-     (->> (if ns-match
-            (nses ns-match {:search-docstrings false})
+  ([match {:keys [search-docstrings] :or {search-docstrings true}}]
+   (let [[nsp np] (when (or (string? match) (symbol? match))
+                    (qualified match))
+         qregex?  (and (instance? Pattern match)
+                    (str/includes? (Pattern/.pattern match) "/"))
+         m        (cond
+                    nsp             (not-empty np)
+                    (symbol? match) (str match)
+                    :else           match)
+         hit      (matcher m)
+         _        (when-not (or hit nsp)
+                    (throw (ex-info "vars searches: match with a string, a regex or a symbol"
+                             {:match match})))
+         exact    (when hit (exactly m))
+         doc-hit  (when (and hit search-docstrings) hit)
+         subject  (if qregex?
+                    #(str (:ns %) "/" (:name %))
+                    #(str (:name %)))
+         tier     (fn [e]
+                    (if-not hit
+                      0
+                      (let [n (subject e)]
+                        (cond (exact n) 0 (hit n) 1 :else 2))))]
+     (->> (if nsp
+            (keep find-ns (nses nsp {:search-docstrings false}))
             (all-ns))
        (mapcat (fn [ns]
-                 (map #(into {:ns (ns-name ns)} %)
-                   (keep #(entry % false hit) (vals (ns-interns ns))))))
+                 (let [name-hit (if qregex?
+                                  #(hit (str (ns-name ns) "/" %))
+                                  hit)]
+                   (map #(into {:ns (ns-name ns)} %)
+                     (keep #(entry % false name-hit doc-hit) (vals (ns-interns ns)))))))
        (sort-by (fn [e] [(tier e) (:ns e) (or (:line e) Long/MAX_VALUE)]))
        (into [])))))
 
@@ -218,7 +286,7 @@
      (-> {:ns (ns-name ns)}
        (cond-> doc (assoc :doc (if include-docstrings doc (gist doc))))
        (assoc :vars
-         (let [entries (keep #(entry % include-docstrings hit) (vals (ns-interns ns)))
+         (let [entries (keep #(entry % include-docstrings hit hit) (vals (ns-interns ns)))
                entries (if include-private entries (filter #(-> % :private not) entries))]
            (->> entries
              (sort-by (fn [e] (or (:line e) Long/MAX_VALUE)))

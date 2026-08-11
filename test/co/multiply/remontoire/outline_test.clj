@@ -91,24 +91,80 @@
     "a match is required — the whole var population is no glance"))
 
 
-(deftest vars-scopes-by-namespace-name
+(deftest vars-scopes-by-qualified-match
   (try
     (alter-meta! (create-ns 'aaa.commentary) assoc
       :doc "Mentions the fixture namespace without resembling it.")
     (intern 'aaa.commentary 'public-decoy :decoy)
-    (let [hits (outline/vars "public" {:ns-match "fixture"})]
+    (let [hits (outline/vars "fixture/public")]
       (is (= '[public-fn public-macro] (mapv :name hits))
         "only vars from the scoped namespaces answer")
       (is (every? #(str/includes? (str (:ns %)) "fixture") hits)
         "the scope is namespaces whose *name* matches")
       (is (not-any? #(= 'public-decoy (:name %)) hits)
         "a docstring mention of the scope term does not widen it"))
-    (is (= [] (outline/vars "public" {:ns-match "no.such.loaded.ns"}))
+    (is (= (outline/vars "fixture/public") (outline/vars 'fixture/public))
+      "string and symbol spell the same qualified match")
+    (is (= [] (outline/vars "no.such.loaded.ns/public"))
       "an empty scope is an empty answer, not the whole system")
     (is (= (outline/vars "frobnitz") (outline/vars "frobnitz" nil))
       "no scope means the whole system, as in the 1-arity")
     (finally
       (remove-ns 'aaa.commentary))))
+
+
+(deftest vars-qualified-empty-sides
+  (is (= (outline/vars "frobnitz") (outline/vars "/frobnitz"))
+    "an empty ns side degenerates to the bare search")
+  (let [hits (outline/vars "co.multiply.remontoire.fixture/")]
+    (is (= '[plain-value hidden *knob* public-fn private-fn public-macro poly]
+          (mapv :name hits))
+      "an empty name side lists the scope whole, in source order")
+    (is (not-any? :matched hits) "no name match, no quoted evidence")))
+
+
+(deftest vars-qualified-validation
+  (is (thrown? IllegalArgumentException (outline/vars "a/b/c"))
+    "more than one / in a string is ambiguous")
+  (is (thrown? IllegalArgumentException (outline/vars (symbol "a/b/c")))
+    "and in a symbol's ns part likewise")
+  (is (thrown? IllegalArgumentException (outline/vars "core//"))
+    "the var named / is a symbol's to reach")
+  (is (thrown? IllegalArgumentException (outline/vars "/"))
+    "both sides empty scopes nothing")
+  (is (= '{:ns clojure.core, :name /}
+        (select-keys (first (outline/vars 'clojure.core//)) [:ns :name]))
+    "the reader splits 'clojure.core// — the division var answers, exact tier first"))
+
+
+(deftest vars-qualified-regex
+  (is (= '[public-fn public-macro]
+        (mapv :name (outline/vars #"fixture/public-")))
+    "a regex with a / matches whole qualified names")
+  (is (not-any? #(= 'plain-value (:name %)) (outline/vars #"fixture"))
+    "a slashless regex matches bare names — a namespace hit alone is no hit"))
+
+
+(deftest vars-names-only-on-request
+  (is (some #(= 'public-fn (:name %)) (outline/vars "fixture/frobnitz"))
+    "by default the name side searches docstrings")
+  (is (= [] (outline/vars "fixture/frobnitz" {:search-docstrings false}))
+    "with :search-docstrings false the docstring tier vanishes")
+  (is (= [] (outline/vars "frobnitz" {:search-docstrings false}))
+    "on the bare search too"))
+
+
+(deftest star-is-a-gap
+  (is (= '[public-fn] (mapv :name (outline/vars "fixture/pu*-fn")))
+    "* matches any run within the name side")
+  (is (some #{'co.multiply.remontoire.fixture} (outline/nses "co.*.fixture"))
+    "the wildcard serves nses the same way")
+  (is (= '[public-macro]
+        (mapv :name (:vars (outline/outline 'co.multiply.remontoire.fixture
+                             {:match "p*-macro"}))))
+    "and outline's :match")
+  (is (= [] (outline/vars "no*such*name"))
+    "a starred miss is still a miss"))
 
 
 (deftest outline-is-the-namespace-at-a-glance

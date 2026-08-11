@@ -543,9 +543,13 @@
    `doc/logbook.md` carries the evidence): the eager channel is paid by every conversation in a
    project whether the REPL is used or not, goes stale against a
    hot-reloading server, and is first under the knife at context
-   compaction — so it carries only what must be eager. *When*: the fit,
-   phrased affirmatively so the read-only calls where an outline beats a
-   file scan actually happen. *Whether*: effects are real, weighed
+   compaction — so it carries only what must be eager. *When*: the fit
+   as a capability contrast plus intent→incantation pairs — named calls
+   with the query pre-spelled, because the 2026-08-11 in-situ trial
+   showed an abstract preference losing the decision moment to grep
+   muscle memory even after a manual read, and this eager channel is the
+   only surface still in context when that moment arrives. *Whether*:
+   effects are real, weighed
    together with the environment — `:describe` letting the server name
    its own (\"here: the production system behind …\"). And the pointer:
    `(__r/manual)` delivers the bulk fresh from the running build, its
@@ -556,11 +560,15 @@
     "runs inside the JVM itself, among the loaded namespaces and running "
     "state of the actual system"
     (when-let [d (:describe @config)] (str " (here: " d ")"))
-    " — not a sandbox. Prefer it for navigating and reading Clojure — "
-    "namespaces, signatures, var lookups, docstrings, source, live data — where it is "
-    "faster and more precise than file search, as well as for evaluating "
-    "code. It uses async semantics: in your first eval, run `(__r/manual)`, "
-    "unless you've already read it in this conversation."))
+    " — not a sandbox. For navigating Clojure it beats file search: where "
+    "grep guesses paths over the repo's text, these read the JVM — every "
+    "loaded namespace, dependency jars included, current after hot reloads, "
+    "and effectively instant. Where does X live? `(__r/vars \"helpers/await\")` "
+    "— both sides partial, `*` a wildcard. What's in a namespace? "
+    "`(__r/outline 'some.ns)`. One var? `(__r/doc ns/x)` / `(__r/source ns/x)`. "
+    "The file as written? `(__r/file 'some.ns)`. For evaluating code it uses "
+    "async semantics: in your first eval, run `(__r/manual)`, unless you've "
+    "already read it in this conversation."))
 
 
 (defmethod handle "initialize" [{:keys [id params] ::keys [ctx]}]
