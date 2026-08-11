@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0 - 2026-08-11
+
+- **Breaking: `file` returns the vector of lines**, like `out` before it — composition is the window. The
+  1-indexed `:line` an `outline` or `vars` entry carries indexes it directly: `(drop (dec line) (file ns))`
+  starts reading at the var, which is precisely the drilldown models were observed reconstructing by hand
+  from the string. String consumers `str/join` with a newline.
+- The api docstrings move to a terse contract template: an `Accepts:` section with exact match and option
+  semantics (absent on nullary functions — absence is the clearer signal), and an `Output shape:` section
+  always present, even when trivial, so a caller can compose on a result — or slice it into the first
+  call — without a probe eval to learn its keys. Special capabilities stay with the docstring; general
+  composition advice lives in the manual; adjacent functions cross-reference instead of repeating.
+- `vars` takes `{:ns-match m}` — the forms `match` takes — scoping the search to namespaces whose *name*
+  matches: a docstring mention is no reason to widen a scope. An unmatched scope is an empty answer, not
+  the whole system.
+- `nses` takes `{:search-docstrings false}`, restricting the search to names — the docstring tier
+  vanishes; it is the name-only form `:ns-match` scopes through.
+- `outline`'s `:match` takes a symbol, matched as its name — the capacity `nses` and `vars` already had,
+  now defined once in the shared matcher, so all three agree.
+
 ## 0.2.0 - 2026-08-10
 
 - **Breaking: the `__q` alias is retired.** Scratch namespaces are pre-wired with Quiescent exactly as committed
