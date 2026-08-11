@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-08-11
 
 - **Breaking: `vars` speaks qualified matches; `:ns-match` is gone.** A `/` in the match qualifies it,
   spelling the search the way Clojure spells the target: `(vars "helpers/await")` — string or symbol —
