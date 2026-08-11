@@ -36,16 +36,19 @@
 
 
 (defn- matcher
-  "A predicate over strings from `match`: a regex as given, or a string as
-   a case-insensitive substring — models write \"evict\" as readily as
-   #\"evict\", and both should work."
+  "A predicate over strings from `match`: a regex as given, a string as a
+   case-insensitive substring, or a symbol matched as its name — models
+   write \"evict\" as readily as #\"evict\" or 'evict, and all three
+   should work."
   [match]
   (cond
     (nil? match) nil
     (instance? Pattern match) #(re-find match %)
-    (string? match) (let [p (re-pattern (str "(?i)" (Pattern/quote match)))]
-                      #(re-find p %))
-    :else (throw (ex-info (str ":match takes a string or a regex, not " (pr-str match))
+    (or (string? match) (symbol? match))
+    (let [p (re-pattern (str "(?i)" (Pattern/quote (str match))))]
+      #(re-find p %))
+    :else (throw (ex-info (str ":match takes a string, a symbol or a regex, not "
+                            (pr-str match))
                    {:match match}))))
 
 
@@ -93,20 +96,23 @@
 
 
 (defn file
-  "The source file of the namespace `x` designates, verbatim, as a string.
-   The munged namespace path is tried first (`.clj`, then `.cljc`), so a
-   namespace assembled from several files — clojure.core `load`s five —
-   answers with its defining file; the `:file` metadata its vars carry is
-   the fallback, covering unconventional layouts. Throws a plain
-   explanation when no file is on the classpath — REPL-minted namespaces
-   and source-stripped AOT jars have none, and that is worth saying
-   outright rather than returning nil."
+  "The source file of the namespace `x` designates, as a vector of lines —
+   lines, like `out`, because composition is the window: the 1-indexed
+   `:line` of an `outline` or `vars` entry indexes it directly,
+   `(drop (dec line) …)` starts reading there. The munged namespace path
+   is tried first (`.clj`, then `.cljc`), so a namespace assembled from
+   several files — clojure.core `load`s five — answers with its defining
+   file; the `:file` metadata its vars carry is the fallback, covering
+   unconventional layouts. Throws a plain explanation when no file is on
+   the classpath — REPL-minted namespaces and source-stripped AOT jars
+   have none, and that is worth saying outright rather than returning
+   nil."
   [x]
   (let [ns     (designated x)
         munged (-> (str (ns-name ns)) (str/replace "." "/") (str/replace "-" "_"))
         paths  (concat [(str munged ".clj") (str munged ".cljc")]
                  (distinct (keep (comp :file meta) (vals (ns-interns ns)))))]
-    (or (some #(some-> (io/resource %) slurp) paths)
+    (or (some #(some-> (io/resource %) slurp str/split-lines) paths)
       (throw (ex-info (str "No source file on the classpath for " (ns-name ns))
                {:ns (ns-name ns) :tried (vec paths)})))))
 
@@ -120,13 +126,18 @@
    above `x.outline-test` — then remaining name hits, then
    docstring-only hits, alphabetical within each tier; so
    `(nses 'some.ns)` still answers whether a namespace is really loaded.
-   Without `match`, all of them, sorted. Names only, deliberately: a
-   flat vector of symbols is the composable form — filter it, count it,
-   map `outline` over it — which means a docstring hit carries no quoted
-   evidence; `outline` the namespace to see it. Loaded namespaces, not
-   the classpath: what the running system has actually required."
+   Without `match`, all of them, sorted. `{:search-docstrings false}`
+   restricts the search to names — the third tier vanishes; it is how
+   `vars` scopes by `:ns-match`, where a docstring mention would be a
+   surprising reason to widen a scope. Names only in the output,
+   deliberately: a flat vector of symbols is the composable form —
+   filter it, count it, map `outline` over it — which means a docstring
+   hit carries no quoted evidence; `outline` the namespace to see it.
+   Loaded namespaces, not the classpath: what the running system has
+   actually required."
   ([] (nses nil))
-  ([match]
+  ([match] (nses match nil))
+  ([match {:keys [search-docstrings] :or {search-docstrings true}}]
    (let [m   (if (symbol? match) (str match) match)
          hit (matcher m)]
      (if-not hit
@@ -140,7 +151,8 @@
                          (or (exact n)
                            (some exact (str/split n #"\."))) 0
                          (hit n) 1
-                         (some-> (:doc (meta ns)) hit) 2)))]
+                         (and search-docstrings
+                           (some-> (:doc (meta ns)) hit)) 2)))]
          (->> (all-ns)
            (keep #(when-let [t (tier %)] [t (ns-name %)]))
            sort
@@ -159,24 +171,30 @@
    `outline` shows. `match` is required — the JVM's whole var population
    is no glance — and takes what `nses` takes: a string
    (case-insensitive substring), a regex, or a symbol matched as its
-   name."
-  [match]
-  (let [m     (if (symbol? match) (str match) match)
-        hit   (or (matcher m)
-                (throw (ex-info "vars searches: match with a string, a regex or a symbol"
-                         {:match match})))
-        exact (if (string? m)
-                #(String/.equalsIgnoreCase m %)
-                #(boolean (re-matches m %)))
-        tier  (fn [e]
-                (let [n (str (:name e))]
-                  (cond (exact n) 0 (hit n) 1 :else 2)))]
-    (->> (all-ns)
-      (mapcat (fn [ns]
-                (map #(into {:ns (ns-name ns)} %)
-                  (keep #(entry % false hit) (vals (ns-interns ns))))))
-      (sort-by (fn [e] [(tier e) (:ns e) (or (:line e) Long/MAX_VALUE)]))
-      (into []))))
+   name. `{:ns-match m}` scopes the search to the namespaces whose
+   *names* `m` matches — same forms as `match`, docstrings not
+   consulted: a scope widened by a docstring mention would surprise."
+  ([match]
+   (vars match nil))
+  ([match {:keys [ns-match]}]
+   (let [m     (if (symbol? match) (str match) match)
+         hit   (or (matcher m)
+                 (throw (ex-info "vars searches: match with a string, a regex or a symbol"
+                          {:match match})))
+         exact (if (string? m)
+                 #(String/.equalsIgnoreCase m %)
+                 #(boolean (re-matches m %)))
+         tier  (fn [e]
+                 (let [n (str (:name e))]
+                   (cond (exact n) 0 (hit n) 1 :else 2)))]
+     (->> (if ns-match
+            (nses ns-match {:search-docstrings false})
+            (all-ns))
+       (mapcat (fn [ns]
+                 (map #(into {:ns (ns-name ns)} %)
+                   (keep #(entry % false hit) (vals (ns-interns ns))))))
+       (sort-by (fn [e] [(tier e) (:ns e) (or (:line e) Long/MAX_VALUE)]))
+       (into [])))))
 
 
 (defn outline
@@ -184,8 +202,9 @@
    :vars [entry …]}`, entries in source order, privates included and
    marked — the glance, signatures only, safe for any size of namespace.
    Options: `:include-docstrings` carries every docstring whole (and the
-   full ns docstring); `:match` (string or regex) keeps only vars whose
-   name or docstring matches. The default flipped twice on 2026-08-05:
+   full ns docstring); `:match` (a string, a regex, or a symbol matched
+   as its name, as everywhere) keeps only vars whose name or docstring
+   matches. The default flipped twice on 2026-08-05:
    docstrings-on when this call was the initialize instructions'
    bootstrap and both fresh tenants stripped the option; back to the
    glance when the rendered manual moved into the instructions

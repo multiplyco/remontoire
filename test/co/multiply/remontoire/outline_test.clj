@@ -50,6 +50,20 @@
       (remove-ns 'aaa.remarks))))
 
 
+(deftest nses-names-only-on-request
+  (try
+    (alter-meta! (create-ns 'aaa.marginalia) assoc
+      :doc "Mentions the fixture namespace without resembling it.")
+    (is (some #{'aaa.marginalia} (outline/nses "fixture"))
+      "by default docstrings are searched")
+    (let [hits (outline/nses "fixture" {:search-docstrings false})]
+      (is (some #{'co.multiply.remontoire.fixture} hits))
+      (is (not-any? #{'aaa.marginalia} hits)
+        "with :search-docstrings false the docstring tier vanishes"))
+    (finally
+      (remove-ns 'aaa.marginalia))))
+
+
 (deftest vars-searches-the-whole-loaded-system
   (let [hits (outline/vars "frobnitz")]
     (is (= '[co.multiply.remontoire.fixture] (mapv :ns hits))
@@ -75,6 +89,26 @@
   (is (= [] (outline/vars "no-var-answers-to-this-name")))
   (is (thrown? Exception (outline/vars nil))
     "a match is required — the whole var population is no glance"))
+
+
+(deftest vars-scopes-by-namespace-name
+  (try
+    (alter-meta! (create-ns 'aaa.commentary) assoc
+      :doc "Mentions the fixture namespace without resembling it.")
+    (intern 'aaa.commentary 'public-decoy :decoy)
+    (let [hits (outline/vars "public" {:ns-match "fixture"})]
+      (is (= '[public-fn public-macro] (mapv :name hits))
+        "only vars from the scoped namespaces answer")
+      (is (every? #(str/includes? (str (:ns %)) "fixture") hits)
+        "the scope is namespaces whose *name* matches")
+      (is (not-any? #(= 'public-decoy (:name %)) hits)
+        "a docstring mention of the scope term does not widen it"))
+    (is (= [] (outline/vars "public" {:ns-match "no.such.loaded.ns"}))
+      "an empty scope is an empty answer, not the whole system")
+    (is (= (outline/vars "frobnitz") (outline/vars "frobnitz" nil))
+      "no scope means the whole system, as in the 1-arity")
+    (finally
+      (remove-ns 'aaa.commentary))))
 
 
 (deftest outline-is-the-namespace-at-a-glance
@@ -104,7 +138,9 @@
       "a docstring hit keeps the var")
     (is (seq (:matched (first (:vars m)))) "and quotes its evidence"))
   (let [m (outline/outline 'co.multiply.remontoire.fixture {:match "public"})]
-    (is (= '[public-fn public-macro] (mapv :name (:vars m)))))
+    (is (= '[public-fn public-macro] (mapv :name (:vars m))))
+    (is (= m (outline/outline 'co.multiply.remontoire.fixture {:match 'public}))
+      "a symbol is matched as its name, as in nses/vars"))
   (let [pub (outline/outline 'co.multiply.remontoire.fixture
               {:include-private false})]
     (is (not-any? :private (:vars pub)) "the public surface alone on request")
@@ -126,10 +162,16 @@
 
 
 (deftest file-reads-what-is-written
-  (let [s (outline/file 'co.multiply.remontoire.fixture)]
-    (is (str/includes? s "(ns co.multiply.remontoire.fixture"))
-    (is (str/includes? s "(defmethod poly :a")
-      "the whole file, not just what interns vars"))
+  (let [lines (outline/file 'co.multiply.remontoire.fixture)]
+    (is (vector? lines))
+    (is (every? string? lines))
+    (is (str/starts-with? (first lines) "(ns co.multiply.remontoire.fixture"))
+    (is (some #(str/includes? % "(defmethod poly :a") lines)
+      "the whole file, not just what interns vars")
+    (let [line (->> (outline/outline 'co.multiply.remontoire.fixture) :vars
+                 (some #(when (= 'public-fn (:name %)) (:line %))))]
+      (is (str/starts-with? (nth lines (dec line)) "(defn public-fn")
+        "an outline entry's 1-indexed :line indexes the lines")))
   (try
     (is (thrown? Exception (outline/file (create-ns 'remontoire.test.no-file)))
       "a namespace with no source says so rather than returning nil")

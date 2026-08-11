@@ -45,15 +45,15 @@ anywhere inside it. Infinite seqs themselves are fine to work with — `(def nat
 
 That synchronous veneer ends at the form boundary — inside a form you are writing ordinary async Clojure, where a task
 nobody returns or composes is an orphan: never waited on, and cancelled silently by the time the eval settles —
-`(dotimes [_ 3] (q/sleep 100))` sleeps not at all. See the Quiescent documentation and the `iteration` pattern
-namespace for alternatives.
+`(dotimes [_ 3] (q/sleep 100))` sleeps not at all. See the Quiescent documentation and the `iteration` pattern namespace
+for alternatives.
 
 ## Handles and retention
 
 Every response carries its eval's id. An id is a handle to work, not just to a result: compose on it before it settles —
-`(q/then (__r/res 12) report!)`, `(q/cancel (__r/res 12))` — and deref `(__r/res 12)` for the value after, safely
-and repeatedly. The mechanics — exceptions as values, failure renderings, reading output back — are in the docstrings
-of `res`, `failure` and `out` in the reference this call returned.
+`(q/then (__r/res 12) report!)`, `(q/cancel (__r/res 12))` — and deref `(__r/res 12)` for the value after, safely and
+repeatedly. The mechanics — exceptions as values, failure renderings, reading output back — are in the docstrings of
+`res`, `failure` and `out` in the reference this call returned.
 
 Retention you can rely on: running work and unread results are never evicted, however much work piles on. Reading a
 result is delivery — it admits the entry to a bounded least-recently-used pool, where what you keep touching is what
@@ -70,10 +70,12 @@ separately, so parallel tasks interleave mid-line — from concurrent work, prin
 
 The system is read by drilling down: `(__r/nses)` lists the loaded namespaces, `(__r/outline 'some.ns)` reads one —
 signatures at a glance, docstrings and search via its options — `doc` and `source` read single vars, and `file` reads a
-whole source file. When the namespace is the unknown — where does that function live? — `(__r/vars "name")` searches
-every loaded var by name and docstring. Recipes for the common async shapes — cleanup, deadlines, partial results,
-integrations, work that outlives its eval, bounded fan-out, repeating work — are loaded pattern namespaces:
-`(__r/nses "patterns")` is the index, `outline` and `file` read them.
+whole source file as lines, sliceable by the `:line` an outline entry carries. When the namespace is the unknown —
+where does that function live? — `(__r/vars "name")` searches every loaded var by name and docstring. All of these
+return plain data — `vars` scored, best hits first — so a large result is a collection like any other: `take`, `drop`,
+`filter`, whatever idiom builds the narrowing or pagination the search calls for. Recipes for the common async shapes —
+cleanup, deadlines, partial results, integrations, work that outlives its eval, bounded fan-out, repeating work — are
+loaded pattern namespaces: `(__r/nses "patterns")` is the index, `outline` and `file` read them.
 
 ## Sharing the JVM
 
@@ -81,15 +83,15 @@ One JVM, one system: the registry is shared across every connected session — `
 tags what other sessions minted, and `(__r/res id)` reaches it all, which is how sessions hand work to each other.
 Etiquette: read each other's settled work; leave a stranger's running entries to their owner. Your own session holds
 your current namespace and your delivery claims, and expires after 24 h of silence; `sessions` (the roster),
-`introduce!` (your line on it) and `release!` (the punctuation that marks a leg of work absorbed) are each a
-docstring away.
+`introduce!` (your line on it) and `release!` (the punctuation that marks a leg of work absorbed) are each a docstring
+away.
 
-Your scratch namespace is yours to `def` and `require` in freely — a namespace of your own, so nothing you mint
-collides with another tenant's. Its Quiescent wiring means one dialect everywhere: an idiom copies verbatim between
-the Quiescent skill, the host's own source and your evals, in both directions. Outside scratch, requiring and
-aliasing Quiescent is yours to do — and since you did it, you know what you called it. One recommendation: in a
-namespace you don't own, alias it `__q` — requiring into a host namespace rewires its alias map, and the dunder is
-the collision-proof spelling of that act.
+Your scratch namespace is yours to `def` and `require` in freely — a namespace of your own, so nothing you mint collides
+with another tenant's. Its Quiescent wiring means one dialect everywhere: an idiom copies verbatim between the Quiescent
+skill, the host's own source and your evals, in both directions. Outside scratch, requiring and aliasing Quiescent is
+yours to do — and since you did it, you know what you called it. One recommendation: in a namespace you don't own, alias
+it `__q` — requiring into a host namespace rewires its alias map, and the dunder is the collision-proof spelling of that
+act.
 
 Hygiene worth starting from: work from scratch and reach into the system by qualified name — `#'their.ns/private-var`
 reads and calls even privates — leaving host namespaces as your visit found them. Moving in with `in-ns`, or requiring

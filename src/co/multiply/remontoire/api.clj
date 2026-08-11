@@ -25,16 +25,14 @@
 
 (defn manual
   "The manual, in one call — read it before your first real eval. Prints
-   the prose half: the conceptual model of this environment — what an id
-   is, what retention can be relied on, how sessions share the one JVM,
-   and the async semantics that otherwise surprise silently. Returns the
-   API reference as data: this namespace's outline, public vars with
-   their full docstrings — live, so it is the running build's truth
-   where anything delivered at connection time may since have gone stale
-   (§4). Publics only; privates stay readable through a real `outline`.
-   Reading it also marks this session as informed, which retires the
-   unread note from its responses. Once per conversation is enough —
-   servers sharing a build share a manual."
+   the prose half: the conceptual model of this environment. Reading it
+   marks this session as informed, retiring the unread note from its
+   responses. Once per conversation is enough — servers sharing a build
+   share a manual.
+
+   Output shape:
+   the API reference — this namespace's `outline` with full docstrings,
+   publics only, live from the running build (§4)."
   []
   (session/manual-read! (whoami))
   (println (slurp (io/resource "co/multiply/remontoire/api/manual.md")))
@@ -43,53 +41,78 @@
 
 
 (defn res
-  "The task for eval `id`. Deref for the value — safe to repeat — or compose:
-   `(q/cancel (res 12))` cancels, handlers chain onto it. To read an
-   exception, `(q/get-ex (res 12))` is it as a value — failure or
-   cancellation alike, nil otherwise; `catch` also reads a failure, but a
-   *cancelled* entry passes cancellation through `catch` to whatever eval
-   composes on it. Reading is delivery: it refreshes the entry and admits
-   it to the evictable pool once settled."
+  "The task for eval `id`.
+
+   Accepts:
+   - `id`: a registry entry id, any session's.
+
+   Deref for the value — safe to repeat — or compose: `(q/cancel (res 12))`
+   cancels, handlers chain onto it. `(q/get-ex (res 12))` reads an
+   exception as a value — failure or cancellation alike, nil otherwise;
+   `catch` also reads a failure, but a *cancelled* entry passes
+   cancellation through `catch` to whatever composes on it. Reading is
+   delivery: it refreshes the entry and admits it to the evictable pool
+   once settled.
+
+   Output shape:
+   Task ; Quiescent"
   [id]
   (registry/res id))
 
 
 (defn evals
-  "One map per live registry entry, oldest first — id, status, peer, time.
-   The registry is shared across every session on this JVM, so entries
-   another session minted appear too, tagged `:by` with their owner's id
-   prefix — attribution, not isolation: what you didn't make is labeled,
-   never hidden, and `(res id)` reaches it all the same."
+  "One map per live registry entry, oldest first. The registry is shared
+   across every session on this JVM — attribution, not isolation: what
+   you didn't make is labeled `:by`, never hidden, and `(res id)` reaches
+   it all the same.
+
+   Output shape:
+   [{:id     Long
+     :status Keyword  ; :running :done :failed :cancelled
+     :peer   String
+     :at     Inst
+     :by     String}  ; owner's id prefix — only on entries you didn't mint
+    …]"
   []
   (registry/evals))
 
 
 (defn out
-  "What eval `id` has printed so far, as a vector of lines — usable
-   mid-run, since the capture fills as the work speaks. Both streams,
-   `*out*` and `*err*`, interleaved in arrival order — warnings and
-   stack traces land here beside the data — with the pending
-   unterminated line last: it is the progress line. Lines, because
-   reading back is composing: `(take-last 5 (out id))` peeks at a chatty
-   eval, `drop-last` then `take-last` pages further back, `filter`
-   searches; `(run! println (out id))` is the reading form, arriving
-   verbatim under `;; out`. Retention is the bank's 32 KiB tail — chars the cap
-   dropped are announced as the first element, never silently absent —
-   and reading takes nothing from it: however the vector is sliced, the
-   next read has it whole. A read *about* the entry, not of its result:
-   it neither refreshes nor delivers."
+  "What eval `id` has printed so far, as lines — usable mid-run, since
+   the capture fills as the work speaks.
+
+   Accepts:
+   - `id`: a registry entry id, any session's.
+
+   Both streams, `*out*` and `*err*`, interleaved in arrival order, the
+   pending unterminated line last — it is the progress line. Retention is
+   the bank's 32 KiB tail; chars the cap dropped are announced as the
+   first element, never silently absent. Reading takes nothing from it:
+   the next read has it whole. A read *about* the entry, not of its
+   result — it neither refreshes nor delivers. `(run! println (out id))`
+   is the reading form, as with `file`.
+
+   Output shape:
+   [String …]"
   [id]
   (some-> (:bank (registry/entry id)) tee/lines))
 
 
 (defn failure
   "The rendered failure of eval `id`: the exception chain and the
-   interesting frames, the eval machinery's own frames subtracted — the
-   same rendering a failed eval response carries. A rendering, not the
-   throwable — for programmatic access, `(q/get-ex (res id))` is the
-   exception itself as a value, cancellation included, and `ex-data` works
-   from there. Reading a failure is delivery, like any `res`. When `id`
-   did not fail, says how it stands instead — safe for any state."
+   interesting frames, the eval machinery's own subtracted — the same
+   rendering a failed eval response carries.
+
+   Accepts:
+   - `id`: a registry entry id, any session's. Safe for any state — when
+     `id` did not fail, says how it stands instead.
+
+   A rendering, not the throwable — for programmatic access,
+   `(q/get-ex (res id))` is the exception itself as a value. Reading a
+   failure is delivery, like any `res`.
+
+   Output shape:
+   String"
   [id]
   (let [task (registry/res id)]
     (if (= :failed (registry/status task))
@@ -100,12 +123,17 @@
 
 
 (defn sessions
-  "Who is connected to this JVM: one map per live session — `:sid`,
-   `:idle-s` since it last spoke, `:client` name and version, its `:note`
-   when it introduced itself, how many `:entries` it owns — with `:you`
-   marking the caller's own row. The roster answers what would otherwise
-   take guesswork: whose entries are these, when was that session last
-   alive, which id am I now."
+  "Who is connected to this JVM: one map per live session, `:you` marking
+   the caller's own row.
+
+   Output shape:
+   [{:sid     String
+     :idle-s  Long    ; seconds since it last spoke
+     :entries Long    ; registry entries it owns
+     :client  String  ; name and version, when known
+     :note    String  ; its introduce! line, when given
+     :you     true}   ; present only on the caller's row
+    …]"
   []
   (let [caller (whoami)
         counts (registry/owners)
@@ -122,10 +150,16 @@
 
 
 (defn introduce!
-  "Describe this session on the roster — what it is for, in its own words:
-   `(__r/introduce! \"debugging the payment retry storm\")`. A commit
-   message for a session: other tenants reading `(sessions)` see who is
-   here and why, instead of an anonymous id owning entries."
+  "Describe this session on the roster — what it is for, in its own
+   words: a commit message for a session, read by other tenants via
+   `(sessions)`.
+
+   Accepts:
+   - `s`: the description — one line, present tense:
+     \"debugging the payment retry storm\".
+
+   Output shape:
+   `s`, unchanged."
   [s]
   (session/note! (whoami) s)
   s)
@@ -133,33 +167,39 @@
 
 (defn release!
   "Punctuation: mark the leg of work behind this session absorbed and
-   evictable, instead of sifting the conversation for what has been read
-   and what might still be running. `(release!)` is a comma — every
-   settled, unread entry this session owns is released; running entries
-   are left alone and stay live concerns, settled news included.
-   `(release! true)` is a period — running entries are cancelled too.
-   Returns {:released [ids] :cancelled [ids]}: what was absorbed versus
-   what was stopped — the report is the audit. Also the polite goodbye, in
-   a system whose clients rarely send one: punctuate when a leg of work
-   ends, and the claims lapse now rather than at the 24 h silence expiry.
-   The eval performing the release is exempt from its own period —
-   punctuation ends the leg behind you, not the sentence being spoken."
+   evictable. Punctuate when a leg of work ends — the claims lapse now
+   rather than at the 24 h silence expiry.
+
+   Accepts:
+   - `period?`: default false, a comma — every settled, unread entry this
+     session owns is released; running entries stay live concerns.
+     true is a period — running entries are cancelled too, except the
+     eval performing the release: punctuation ends the leg behind you,
+     not the sentence being spoken.
+
+   Output shape:
+   {:released  [Long …]  ; absorbed
+    :cancelled [Long …]} ; stopped — the report is the audit"
   ([] (release! false))
   ([period?]
    (registry/release! (whoami) (boolean period?) (sc/ask tee/*bank* nil))))
 
 
 (defn scoped-fn
-  "`bound-fn*` for scope: capture the current scope — output attribution
-   included — and return a fn of the same arguments that re-establishes it
-   wherever it runs. For work that escapes the task tree: raw threads,
-   executor callbacks, futures launched from *inside* a nested task.
-   Not needed for Quiescent tasks, which carry scope themselves, nor for a
-   `future` launched from top-level eval code, which Clojure conveyance
-   covers.
+  "`bound-fn*` for scope: capture the current scope, output attribution
+   included.
 
-   See `co.multiply.scoped` for lower level scope propagation utilities if
-   this function proves insufficient."
+   Accepts:
+   - `f`: any fn.
+
+   For work that escapes the task tree: raw threads, executor callbacks,
+   futures launched from *inside* a nested task. Not needed for Quiescent
+   tasks, which carry scope themselves, nor for a `future` launched from
+   top-level eval code, which Clojure conveyance covers. See
+   `co.multiply.scoped` for lower-level scope propagation utilities.
+
+   Output shape:
+   fn — `f`'s arguments, run under the captured scope."
   [f]
   (let [scope (sc/current-scope)]
     (fn [& args]
@@ -167,85 +207,114 @@
 
 
 (defn nses
-  "Every loaded namespace, as a vector of symbols — the system at a
-   glance, and the top of the drilldown: `nses` to find the namespace,
-   `outline` to read it, `doc` and `source` for its vars. An optional
-   `match` — a string (case-insensitive substring), a regex, or a symbol
-   matched as its name — searches names and namespace docstrings, ranked
-   the way `vars` ranks: exact whole-segment matches first, then
-   remaining name hits, then docstring-only hits — so
-   `(nses \"session\")` searches, and `(nses 'co.multiply.quiescent)`
-   answers whether a namespace is really loaded. Plain data, made for
-   composing — filter it, count it, map `outline` over it. The view is
-   the running system's: what has actually been loaded, not everything on
-   the classpath."
+  "Browse all loaded namespaces.
+
+   Accepts:
+   - `match`: String or Symbol (both case-insensitive, can be partial), or regex.
+              Exact whole-segment matches first, then name hits, then docstring-only
+              hits. Alphabetical within each tier.
+   - `opts`: {:search-docstrings false} ; names only, default `true`.
+
+   Returns loaded namespaces only, live in the system.
+
+   Output shape:
+   [Symbol …]"
   ([] (outline/nses nil))
-  ([match] (outline/nses match)))
+  ([match] (outline/nses match))
+  ([match opts] (outline/nses match opts)))
 
 
 (defn vars
-  "Global var search — \"where does that function live?\" answered without
-   guessing namespaces: every loaded var whose name or docstring matches,
-   as outline entries with `:ns` attached. Scored — vars named exactly
-   `match` first, then name hits, then docstring-only hits, in namespace
-   and source order within each tier — so the definition asked for leads
-   and the mentions follow. `match` is a string (case-insensitive
-   substring), a
-   regex, or a symbol matched as its name; docstring hits quote their
-   matching lines as `:matched` — the answer shows its evidence. The
-   whole loaded system is searched, clojure.core and dependencies
-   included, so a broad term returns plenty — narrow it, or filter the
-   hits by `:ns`: they are plain data, made for composing, and each one
-   says where `outline`, `doc` and `source` should look next. Loaded
-   namespaces only, like `nses`: what has never been required has no
-   vars to search."
-  [match]
-  (outline/vars match))
+  "Global var search — \"where does that function live?\".
+
+   Accepts:
+   - `match`: String or Symbol (case-insensitive, can be partial), or regex.
+              Exact matches first, then name hits, then docstring-only hits,
+              in namespace and source order within each tier.
+   - `opts`: {:ns-match <match>} ; As per `nses`, excluding ns docstring matches.
+
+   Matches vars in loaded namespaces, live in the system.
+
+   Output shape:
+   [{:ns         Symbol
+     :name       Symbol
+     :arglists   ([arg …] …) ; absent on non-fns
+     :line       Long        ; when known
+     :private    true        ; flags present only when true
+     :macro      true
+     :dynamic    true
+     :dispatches [… …]       ; multimethods: the dispatch values
+     :matched    [String …]} ; matching quote for docstring hits
+    …]"
+  ([match]
+   (outline/vars match))
+  ([match opts]
+   (outline/vars match opts)))
 
 
 (defn file
-  "The source file of a namespace, verbatim, as a string — comments and
-   `(comment …)` blocks included: the whole of what is *written*, where
-   `outline` shows what is *live*. Takes the designators `outline` takes.
-   Returned rather than printed, for composing — `str/split-lines`, a
-   `drop-while` down to a section — and `(println (file 'some.ns))` is
-   the reading form: printed output arrives verbatim where a returned
-   string renders with its newlines escaped. Mind the size on unfamiliar
-   namespaces — `(count (file 'x))` is cheap, and slicing before
-   returning beats returning the whole of a large file. Throws, plainly,
-   for a namespace with no file on the classpath."
+  "The source file of a namespace, as lines — the whole of what is
+   *written*, comments and `(comment …)` blocks included, where `outline`
+   shows what is *live*.
+
+   Accepts:
+   - `ns`: the designators `outline` takes.
+
+   The 1-indexed `:line` of `outline`/`vars` entries indexes the lines:
+   `(drop (dec line) (file ns))` starts reading at a var. Slice before
+   returning on unfamiliar namespaces — files can be large. `(run! println …)`
+   is the reading form, as with `out`. Throws for a namespace with no
+   source file on the classpath.
+
+   Output shape:
+   [String …]"
   [ns]
   (outline/file ns))
 
 
 (defn outline
-  "A namespace at a glance: `{:ns … :doc … :vars […]}`, one entry per
-   var — name, arglists, `:line`, `:macro`/`:private`/`:dynamic` flags, a
-   multimethod's dispatch values — in source order, privates included and
-   marked, because the point is the gist of the namespace, not just its
-   API; when the API is exactly the question, `{:include-private false}`
-   keeps the public surface alone. Designate the namespace by symbol, by
-   an alias visible from the calling namespace, or with the namespace
-   itself: `(outline '__r)`.
-   Bare output is small enough for any namespace, with the ns docstring's
-   first sentence for orientation; `{:include-docstrings true}` carries
-   every docstring whole — one roundtrip for a full overview when the
-   namespace is small or important. `{:match \"evict\"}` (string,
-   case-insensitive, or regex) keeps only vars whose name or docstring
-   matches; docstring hits quote their matching lines as `:matched`, so
-   the answer shows its evidence. `:line` says where to start reading
-   when the signature isn't enough. The view is the running system's
-   own — after a hot reload it shows what is live, not what is on disk."
+  "A namespace at a glance: one entry per var, in source order, privates
+   included and marked. Bare output is small enough for any namespace.
+
+   Accepts:
+   - `ns`: Symbol, String, an alias visible from the calling namespace, or the
+     Namespace itself. Throws when it designates no loaded namespace.
+   - `opts`: {:include-private false}   ; publics only.
+             {:include-docstrings true} ; every docstring whole.
+             {:match …}                 ; as `match` in `nses`/`vars`; keeps vars
+                                        ; whose name or docstring matches.
+
+   The view is the running system's own — after a hot reload it shows what is
+   live, not what is on disk.
+
+   Output shape:
+   {:ns   Symbol
+    :doc  String                    ; first sentence; whole with :include-docstrings
+    :vars [{:name       Symbol
+            :arglists   ([arg …] …) ; absent on non-fns
+            :line       Long        ; when known
+            :private    true        ; flags present only when true
+            :macro      true
+            :dynamic    true
+            :dispatches [… …]       ; multimethods: the dispatch values
+            :doc        String      ; with :include-docstrings
+            :matched    [String …]} ; matching quote for docstring hits, under :match
+           …]}"
   ([ns] (outline ns nil))
   ([ns opts] (outline/outline ns opts)))
 
 
 (defmacro doc
   "Prints documentation for a var or special form given its name, or for
-   a spec if given a keyword. Printed, not returned — the eval response
-   carries it as output. The name resolves in the current namespace, and
-   an unresolvable one prints nothing rather than throwing — qualify
-   (`__r/failure`, `q/catch`) when in doubt."
+   a spec given a keyword.
+
+   Accepts:
+   - `name`: unquoted; resolves in the current namespace — qualify
+     (`__r/failure`, `q/catch`) when in doubt. Unresolvable prints
+     nothing rather than throwing.
+
+   Output shape:
+   nil — printed, not returned; the eval response carries it as output."
   [name]
   `(crepl/doc ~name))
 
@@ -253,11 +322,15 @@
 (defmacro source
   "Prints the source of a var, given its name: what is *written*, where
    `outline` and `doc` show what is *live* — after a hot reload the two
-   can differ. Printed, not returned — the eval response carries it as
-   output. The name resolves in the current namespace — qualify
-   (`__r/failure`, `q/catch`) when in doubt — and the defining file must
-   be on the classpath, which holds for anything shipped as source;
-   otherwise, and for an unresolvable name, it prints `Source not
-   found`."
+   can differ.
+
+   Accepts:
+   - `name`: unquoted; resolves in the current namespace — qualify
+     (`__r/failure`, `q/catch`) when in doubt. Needs the defining file on
+     the classpath, which holds for anything shipped as source;
+     otherwise, and for an unresolvable name, prints `Source not found`.
+
+   Output shape:
+   nil — printed, not returned; the eval response carries it as output."
   [name]
   `(crepl/source ~name))

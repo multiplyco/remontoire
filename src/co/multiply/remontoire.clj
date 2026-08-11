@@ -1,6 +1,7 @@
 (ns co.multiply.remontoire
   "Public entry point. Inert until `init!`."
   (:require
+    [clojure.string :as str]
     [co.multiply.remontoire.http :as http]
     [co.multiply.remontoire.mcp :as mcp]
     [co.multiply.remontoire.registry :as registry]
@@ -87,6 +88,7 @@
   (stop!)
 
   (filterv #(-> % :private not) (:vars (__r/outline 'co.multiply.quiescent)))
-  (co.multiply.remontoire.api/outline 'co.multiply.quiescent)
+  (co.multiply.remontoire.api/vars 'capacity! {:ns-match 'clojure})
+  (co.multiply.remontoire.api/file 'co.multiply.remontoire.api)
 
   :-)
