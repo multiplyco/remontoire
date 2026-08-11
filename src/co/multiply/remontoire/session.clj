@@ -40,8 +40,8 @@
 
 
 ;; sid → {:last-seen ms, :client m, :current-ns sym, :fetched-tools decls,
-;;        :evictions [ids], :manual-read bool}. Keys are transport-minted
-;; ids, never nil: a
+;;        :evictions [ids], :manual-read bool, :nudged bool}. Keys are
+;; transport-minted ids, never nil: a
 ;; request without one is refused at the door (http, 2026-08-06).
 (defonce ^:private state (atom {}))
 
@@ -161,11 +161,12 @@
 
 (defn manual-read!
   "Mark `sid` as having read the manual — set when `api/manual` runs on its
-   rails. Until it is set, eval responses carry a one-line unread note (§4):
-   the keys stay in the model's hands, but ignorance doesn't stay silent.
-   Doubles as the compliance measurement the lean-instructions design is
-   smoke-tested by. Guarded like `note!` — a dead sid is not recreated —
-   which also makes the sessionless in-process caller a no-op."
+   rails. Until it is set, the session's first eval response carries a
+   one-line note (§4): the keys stay in the model's hands, but a fresh
+   session doesn't start silent. Doubles as the compliance measurement the
+   lean-instructions design is smoke-tested by. Guarded like `note!` — a
+   dead sid is not recreated — which also makes the sessionless in-process
+   caller a no-op."
   [sid]
   (swap! state
     (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :manual-read] true))))
@@ -175,6 +176,26 @@
 (defn manual-read?
   [sid]
   (boolean (get-in @state [sid :manual-read])))
+
+
+(defn nudged!
+  "Mark `sid` as having been shown the manual note — set only once the
+   response carrying it has actually gone out, the same discipline as every
+   delivery mark (§5), so a response the client never received burns
+   nothing. Once per session, deliberately: the server knows only session
+   truth — the conversation may have read the manual through another server
+   of the same build, or before a restart — and a note that repeats what
+   the model already judged spends the footer's credibility, the channel
+   evictions and truncations must be believed on. Guarded like `note!`."
+  [sid]
+  (swap! state
+    (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :nudged] true))))
+  nil)
+
+
+(defn nudged?
+  [sid]
+  (boolean (get-in @state [sid :nudged])))
 
 
 (defn current-ns!

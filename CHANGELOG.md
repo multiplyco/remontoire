@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- The manual note appears once per session — on the first eval response, then never again — and its
+  wording turned from imperative to fact: `;; new session — (__r/manual) unless this conversation has`.
+  The server knows only session truth: a conversation may have read the manual through another server of
+  the same build, or before a restart, so a repeating note is usually wrong exactly where fleets and
+  restarts are the deployment shape — and a footer that cries wolf spends the credibility evictions and
+  truncations are announced on. The note is burned only when its response actually goes out, the same
+  discipline as every delivery mark: a client that timed out was never nudged.
+
 ## 0.5.0 - 2026-08-11
 
 - `vars` exactness reads through conventional decoration: `claim?`, `->Claim` and `*claim*` are exact

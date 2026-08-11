@@ -26,9 +26,8 @@
 (defn manual
   "The manual, in one call — read it before your first real eval. Prints
    the prose half: the conceptual model of this environment. Reading it
-   marks this session as informed, retiring the unread note from its
-   responses. Once per conversation is enough — servers sharing a build
-   share a manual.
+   marks this session as informed. Once per conversation is enough —
+   servers sharing a build share a manual.
 
    Output shape:
    the API reference — this namespace's `outline` with full docstrings,

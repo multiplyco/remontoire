@@ -172,9 +172,13 @@
    silent. So is truncation: a rendering the caps cut says how much was
    elided — exactly when the collections are counted, a floor when a lazy
    tail keeps the total unknowable — and that the entry holds the whole
-   value. A session that has not read the manual is told so, once per
-   response (§4): a fact, not an error — a model that read it on another
-   server of the same build may judge for itself."
+   value. A session that has not read the manual is told so on its first
+   response, and never again (§4): a fact, not an error — the server
+   knows only session truth, and a conversation may have read the manual
+   through another server of the same build, or before a restart. The
+   judgment stays the model's; repeating it would spend this footer's
+   credibility, the channel evictions and truncations must be believed
+   on."
   [{:keys [id note ns forms truncated settled evicted nudge]}]
   (str ";; id " id
     (when note (str " · " note))
@@ -193,7 +197,7 @@
       ;; tenant read it exactly that way, 2026-08-05).
       (str "\n;; evicted " (if (next evicted) "ids " "id ")
         (str/join ", " evicted)))
-    (when nudge "\n;; manual unread — (__r/manual)")))
+    (when nudge "\n;; new session — (__r/manual) unless this conversation has")))
 
 
 (defn- eval-handler
@@ -221,10 +225,18 @@
           ;; the evictable pool, and the news is marked told — but a client
           ;; that timed out read neither, so the entry must stay owed,
           ;; protected, and announceable.
+          ;; The unread check runs here, after the eval — so a first eval
+          ;; that reads the manual arrives already unmarked. Burned only
+          ;; in mark!, once the response has actually gone out: a client
+          ;; that never received the note was never nudged.
+          nudge   (and session
+                    (not (session/manual-read? session))
+                    (not (session/nudged? session)))
           mark!   (fn []
                     (when (not= :running status)
                       (registry/touch! id))
-                    (registry/told! (mapv :id settled)))
+                    (registry/told! (mapv :id settled))
+                    (when nudge (session/nudged! session)))
           line    (fn [opts]
                     ;; The default ns is where this eval *started* — the
                     ;; explicit request, else the session's sticky. Where it
@@ -232,9 +244,6 @@
                     ;; so `:done` overrides with the truth from `details`;
                     ;; the sticky alone misreported explicit-ns evals that
                     ;; outlived their await (measured 2026-08-05).
-                    ;; The unread check runs at response build, after the
-                    ;; eval — so a `manual` call's own response arrives
-                    ;; already unmarked.
                     (footer (merge {:id      id
                                     ;; An explicit ns that does not exist was
                                     ;; never entered — `resolve-ns` refuses
@@ -248,8 +257,7 @@
                                                (evaluate/current-ns session))
                                     :settled settled
                                     :evicted evicted
-                                    :nudge   (and session
-                                               (not (session/manual-read? session)))}
+                                    :nudge   nudge}
                               opts)))
           ;; What the eval printed, when it printed — present in every
           ;; branch, because a `running` or `failed` eval's output is often

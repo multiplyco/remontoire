@@ -168,17 +168,32 @@
       "a deliberately killed task is not immortal-unread")))
 
 
-(deftest the-nudge-lives-exactly-until-the-manual-is-read
+(deftest the-nudge-appears-once-per-session
   (let [sid (session/mint!)]
     (is (str/includes? (tu/text-of (tu/call! sid "eval" {:code "1"}))
-          "(__r/manual)"))
-    (let [r2 (tu/call! sid "eval"
-               {:code "(do (with-out-str (__r/manual)) :read)"})]
-      (is (not (str/includes? (tu/text-of r2) "manual"))
-        "the manual call's own response arrives already unmarked"))
-    (is (true? (session/manual-read? sid)))
+          "(__r/manual)")
+      "the session's first response carries the note")
     (is (not (str/includes? (tu/text-of (tu/call! sid "eval" {:code "2"}))
-               "manual")))))
+               "manual"))
+      "and no later response repeats it, manual read or not"))
+  (let [sid (session/mint!)
+        r1  (tu/call! sid "eval"
+              {:code "(do (with-out-str (__r/manual)) :read)"})]
+    (is (not (str/includes? (tu/text-of r1) "(__r/manual)"))
+      "a first eval that reads the manual arrives already unmarked")
+    (is (true? (session/manual-read? sid)))))
+
+
+(deftest the-nudge-survives-an-undelivered-response
+  (let [sid (session/mint!)]
+    ;; Dispatch without running the delivery mark — a response the client
+    ;; never received, as after a request timeout.
+    (mcp/handle-payload {:jsonrpc "2.0" :id 1 :method "tools/call"
+                         :params  {:name "eval" :arguments {:code "1"}}}
+      {:peer "test" :session sid})
+    (is (str/includes? (tu/text-of (tu/call! sid "eval" {:code "2"}))
+          "(__r/manual)")
+      "an undelivered note burns nothing — the next response carries it")))
 
 
 (deftest evictions-are-announced-never-silent
