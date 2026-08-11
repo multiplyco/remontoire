@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 - 2026-08-11
 
 - The manual note appears once per session — on the first eval response, then never again — and its
   wording turned from imperative to fact: `;; new session — (__r/manual) unless this conversation has`.
