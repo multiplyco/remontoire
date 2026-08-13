@@ -5,7 +5,7 @@
 
 
 (def lib 'co.multiply/remontoire)
-(def version "0.5.1")
+(def version "0.6.0")
 (def class-dir "target/classes")
 (def jar-file (format "target/%s-%s.jar" (name lib) version))
 (def basis (delay (b/create-basis {:project "deps.edn"})))

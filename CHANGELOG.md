@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0 - 2026-08-13
+
+- Scratch compartments: `(__r/scratch! "kbtest")` switches to a named scratch of the session's own,
+  nested under its main scratch — `…scratch.s<tag>.kbtest` — so uniqueness across sessions comes from
+  the session tag and the label stays what the caller chose. Minted and wired like scratch itself on
+  first use (`q` and the `q*` macros, `res`/`evals`, `__r`); within a session the same label is the
+  same compartment thereafter — the label is the compartment's identity, so re-entry after a lost
+  context is the same call as creation. The switch is a real `in-ns` — it sticks across calls — and
+  announces itself on the eval's output. `(__r/scratch!)` returns to the main scratch,
+  `(__r/scratches)` lists the family (the namespace tree is the tracking; no ledger), and
+  `(__r/retire-scratch! "kbtest")` removes a compartment — retiring the ground you stand on lands you
+  back in the main scratch first, and neither the main scratch nor another session's compartment is
+  retirable. Compartments die with the session, like all conversational state.
+
 ## 0.5.1 - 2026-08-11
 
 - The manual note appears once per session — on the first eval response, then never again — and its
