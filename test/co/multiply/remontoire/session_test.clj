@@ -23,6 +23,42 @@
       (is (nil? (re-find #"[^A-Za-z0-9.]" (str sym)))))))
 
 
+(deftest scratch-compartments-nest-under-the-session-scratch
+  (is (= (symbol (str (session/scratch-ns-sym "abc-123") ".kbtest"))
+         (session/scratch-sub-ns-sym "abc-123" "kbtest"))
+    "a plain label is kept whole under the session's scratch")
+  (is (not= (session/scratch-sub-ns-sym "abc-123" "kbtest")
+            (session/scratch-sub-ns-sym "def-456" "kbtest"))
+    "same label, different sessions — different namespaces")
+  (is (= (session/scratch-sub-ns-sym "abc-123" "kbtest")
+         (session/scratch-sub-ns-sym "abc-123" "kbtest"))
+    "the label is the compartment's identity — deterministic, no counter")
+  ;; a label is caller-chosen text; whatever it holds, the result is a
+  ;; namespace-legal symbol nested under the session's scratch
+  (doseq [label ["k.b/test!" "" "2var" "-x" "we ird"]]
+    (let [sym (session/scratch-sub-ns-sym "abc-123" label)]
+      (is (symbol? sym))
+      (is (str/starts-with? (str sym)
+            (str (session/scratch-ns-sym "abc-123") ".")))
+      (is (re-matches #"[A-Za-z][A-Za-z0-9_-]*"
+            (peek (str/split (str sym) #"\.")))
+        (str "segment for " (pr-str label) " opens with a letter")))))
+
+
+(deftest drop-reaps-the-scratch-family
+  (let [sid  (session/mint!)
+        home (session/scratch-ns-sym sid)
+        sub  (session/scratch-sub-ns-sym sid "kbtest")]
+    (session/furnish-scratch! home)
+    (session/furnish-scratch! sub)
+    (is (= [home sub] (session/scratch-nses sid))
+      "the family lists home first, compartments after")
+    (session/drop! sid)
+    (is (nil? (find-ns home)))
+    (is (nil? (find-ns sub)) "compartments die with the session")
+    (is (= [] (session/scratch-nses sid)))))
+
+
 (deftest unknown-ids-are-adopted-not-refused
   (session/seen! "minted-before-a-restart")
   (is (some #(= "minted-before-a-restart" (:sid %)) (session/roster))))

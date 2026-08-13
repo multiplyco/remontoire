@@ -15,7 +15,11 @@
    churn. A deliberate deviation, recorded in §11.
 
    State lives behind `defonce` for the same reason the registry's does:
-   library reloads must not end anyone's session."
+   library reloads must not end anyone's session.
+
+   The scratch namespaces themselves — naming, furnishing, reaping — also
+   live here: a session's scratch family is conversational state exactly
+   like its sticky namespace, created on demand and gone with the session."
   (:import [java.util UUID]))
 
 
@@ -87,18 +91,83 @@
                   (Integer/toHexString (hash sid))))))))
 
 
+(defn scratch-sub-ns-sym
+  "The namespace symbol for `sid`'s scratch compartment named `label` —
+   nested under the session's scratch, so uniqueness across sessions comes
+   from the sid tag and the label stays whatever the caller chose. Within
+   a session the same label always names the same namespace: the label is
+   the compartment's identity. `label` is caller-chosen text, filtered to
+   what a symbol segment can carry like the sid is — `-` and `_` kept,
+   `s`-prefixed when the survivors don't open with a letter, hashed whole
+   when nothing survives."
+  [sid label]
+  (let [tag (into [] (filter #(or (Character/isLetterOrDigit (char %))
+                                (#{\- \_} (char %))))
+              (str label))]
+    (symbol (str (scratch-ns-sym sid) "."
+              (cond
+                (empty? tag) (str "s" (Integer/toHexString (hash (str label))))
+                (not (Character/isLetter (char (first tag)))) (apply str "s" tag)
+                :else (apply str tag))))))
+
+
+(defn furnish-scratch!
+  "Create-or-refresh the scratch namespace `ns-sym`, returning it. Bare
+   `create-ns` gives a namespace in which `+` does not resolve, so the
+   full wiring is applied: clojure.core referred, and the composition
+   surface — clojure.core *and* Quiescent (§5) — spelled exactly as
+   committed source spells it: the `q` alias plus the `q`-prefixed macros
+   referred bare, correct precisely because a scratch is a namespace its
+   session owns. Idioms thereby copy verbatim between evals, the Quiescent
+   skill, and source files; outside the scratch family, aliasing Quiescent
+   is the model's own act (§4). `res` is how an id in one response becomes
+   a value in the next expression, and `__r` the API's one alias — so a
+   scratch resolves them all from the start.
+
+   Idempotent, and re-applied in full on every call: `create-ns` returns
+   the existing namespace, and re-referring keeps a scratch created by an
+   older remontoire current with the refers a newer one expects. A name
+   the caller has interned themselves is never replaced — their def wins,
+   and Clojure notes the rejection on *err*."
+  [ns-sym]
+  (binding [*ns* (create-ns ns-sym)]
+    (refer-clojure)
+    (require '[co.multiply.quiescent :as q
+               :refer [q qdo qjoin qfor qlet qmerge if-qlet when-qlet]]
+      '[co.multiply.remontoire.registry :refer [res evals]]
+      '[co.multiply.remontoire.api :as __r])
+    *ns*))
+
+
+(defn scratch-nses
+  "`sid`'s scratch family as it exists right now: the session's scratch
+   first when present, compartments after, alphabetical. Only namespaces
+   that exist — nothing here mints.
+
+   Output shape:
+   [Symbol …]"
+  [sid]
+  (let [base   (str (scratch-ns-sym sid))
+        prefix (str base ".")]
+    (into []
+      (comp (map ns-name)
+        (filter #(let [n (str %)]
+                   (or (= n base) (String/.startsWith n prefix)))))
+      (sort-by str (all-ns)))))
+
+
 (defn drop!
   "Forget `sid`. The registry releases a session's entry claims before
    dropping it — see `registry/release-session!`, which owns that order.
-   The session's scratch namespace goes with it — conversational state
-   dies with the session — so an eval somehow still running there fails
-   loudly at its next form (`No namespace`) rather than working on in a
-   ghost. The sessionless in-process caller's shared scratch is never
-   removed — no session to die with."
+   The session's scratch family goes with it — compartments included:
+   conversational state dies with the session — so an eval somehow still
+   running there fails loudly at its next form (`No namespace`) rather
+   than working on in a ghost. The sessionless in-process caller's shared
+   scratch family is never removed — no session to die with."
   [sid]
   (swap! state dissoc sid)
   (when (some? sid)
-    (remove-ns (scratch-ns-sym sid)))
+    (run! remove-ns (scratch-nses sid)))
   nil)
 
 

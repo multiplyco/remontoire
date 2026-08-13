@@ -94,6 +94,11 @@ yours to do — and since you did it, you know what you called it. One recommend
 it `__q` — requiring into a host namespace rewires its alias map, and the dunder is the collision-proof spelling of that
 act.
 
+When one scratch isn't enough — two explorations whose defs would collide — `(__r/scratch! "kbtest")` switches to a
+named compartment of your own under it, minted and wired like scratch on first use, and within your session the same
+label is the same compartment thereafter. `(__r/scratch!)` returns to the main scratch, `(__r/scratches)` lists the
+family, and `retire-scratch!` removes a compartment.
+
 Hygiene worth starting from: work from scratch and reach into the system by qualified name — `#'their.ns/private-var`
 reads and calls even privates — leaving host namespaces as your visit found them. Moving in with `in-ns`, or requiring
 and `def`-ing into a namespace others own, is sometimes exactly what the job needs; it just rarely needs to be the

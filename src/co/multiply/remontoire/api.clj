@@ -184,6 +184,72 @@
    (registry/release! (whoami) (boolean period?) (sc/ask tee/*bank* nil))))
 
 
+(defn- enter!
+  "Furnish `ns-sym` and move there, announcing the move — the print rides
+   the eval's own output capture, so the response says where you stand."
+  [ns-sym]
+  (session/furnish-scratch! ns-sym)
+  (let [ns (in-ns ns-sym)]
+    (println (str "switched to scratch namespace " ns-sym))
+    ns))
+
+
+(defn scratch!
+  "Switch to a named scratch compartment of this session's own — a second
+   scratch, so one exploration's defs don't collide with another's. Minted
+   and wired like scratch itself on first use (`q` and the `q*` macros,
+   `res`/`evals`, `__r`); re-entered as it stands thereafter: within a
+   session, the same label always means the same compartment. Compartments
+   die with the session, as scratch does.
+
+   Accepts:
+   - `label`: the compartment's name, yours to choose — one word:
+     \"kbtest\". Omit to return to the session's main scratch.
+
+   Output shape:
+   Namespace — `*ns*` after the switch, which sticks like `in-ns`."
+  ([] (enter! (session/scratch-ns-sym (whoami))))
+  ([label] (enter! (session/scratch-sub-ns-sym (whoami) label))))
+
+
+(defn scratches
+  "This session's scratch family as it stands: the main scratch, then the
+   compartments `scratch!` has minted, alphabetical.
+
+   Output shape:
+   [Symbol …]"
+  []
+  (session/scratch-nses (whoami)))
+
+
+(defn retire-scratch!
+  "Remove a scratch compartment — its defs are gone, and an eval somehow
+   still running there fails loudly at its next form. Retiring the ground
+   you stand on moves you back to the main scratch first. The main scratch
+   itself is not retirable, and neither is anyone else's.
+
+   Accepts:
+   - `label`: the label `scratch!` was given, or the full namespace symbol
+     as `scratches` lists it.
+
+   Output shape:
+   Symbol — the retired namespace's name; nil when no such compartment
+   exists."
+  [label]
+  (let [home (session/scratch-ns-sym (whoami))
+        sym  (if (String/.contains (str label) ".")
+               (symbol (str label))
+               (session/scratch-sub-ns-sym (whoami) label))]
+    (when-not (String/.startsWith (str sym) (str home "."))
+      (throw (ex-info (str sym " is not a scratch compartment of this session")
+               {:ns sym :scratch home})))
+    (when (some? (find-ns sym))
+      (when (= sym (ns-name *ns*))
+        (enter! home))
+      (remove-ns sym)
+      sym)))
+
+
 (defn scoped-fn
   "`bound-fn*` for scope: capture the current scope, output attribution
    included.

@@ -119,6 +119,60 @@
     (is (= :two (:value (run!! "marker" s2))))))
 
 
+(deftest scratch-compartments-are-prewired-and-sticky
+  (let [sid (session/mint!)
+        sub (session/scratch-sub-ns-sym sid "kbtest")]
+    (let [{:keys [value details error]}
+          (run!! (str "(__r/scratch! \"kbtest\") "
+                   "(def marker :kb) "
+                   "(qlet [x (q 1) y (q 2)] (+ x y))")
+            sid)]
+      (is (nil? error))
+      (is (= 3 value) "the compartment is wired like scratch")
+      (is (= sub (:ns details)) "scratch! switches, and the switch sticks"))
+    (is (= :kb (:value (run!! "marker" sid)))
+      "an un-namespaced call continues in the compartment")
+    (is (nil? (:value (run!! "(__r/scratch!) (resolve 'marker)" sid)))
+      "no label is home — the main scratch, where the compartment's defs are not")
+    (is (= :kb (:value (run!! "(__r/scratch! \"kbtest\") marker" sid)))
+      "the same label re-enters the same compartment, defs intact")
+    (is (= [(session/scratch-ns-sym sid) sub]
+           (:value (run!! "(__r/scratches)" sid)))
+      "the family lists home first, this session's compartments only")))
+
+
+(deftest compartments-are-per-session
+  (let [s1 (session/mint!)
+        s2 (session/mint!)]
+    (run!! "(__r/scratch! \"kb\") (def marker :one)" s1)
+    (run!! "(__r/scratch! \"kb\") (def marker :two)" s2)
+    (is (= :one (:value (run!! "marker" s1))))
+    (is (= :two (:value (run!! "marker" s2))))))
+
+
+(deftest retire-scratch-removes-and-lands-you-home
+  (let [sid (session/mint!)
+        sub (session/scratch-sub-ns-sym sid "doomed")]
+    (run!! "(__r/scratch! \"doomed\") (def marker :doomed)" sid)
+    (let [{:keys [value details error]} (run!! "(__r/retire-scratch! \"doomed\")" sid)]
+      (is (nil? error))
+      (is (= sub value) "the retired name is the report")
+      (is (= (session/scratch-ns-sym sid) (:ns details))
+        "retiring the ground you stand on moves you back to scratch"))
+    (is (nil? (find-ns sub)))
+    (is (nil? (:value (run!! "(__r/retire-scratch! \"doomed\")" sid)))
+      "retiring what does not exist is a nil no-op")
+    (is (some? (:error (run!! (str "(__r/retire-scratch! '"
+                                (session/scratch-ns-sym sid) ")")
+                         sid)))
+      "the main scratch is not retirable")
+    (is (some? (:error (run!! (str "(__r/retire-scratch! '"
+                                (session/scratch-sub-ns-sym (session/mint!) "kb")
+                                ")")
+                         sid)))
+      "another session's compartment is not yours to retire")))
+
+
 (deftest aliases-follow-into-visited-namespaces
   (let [sid (session/mint!)]
     (try

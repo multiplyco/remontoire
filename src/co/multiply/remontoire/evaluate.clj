@@ -18,29 +18,11 @@
    cold caller starts: a namespace of one's own, so that a stray `def` lands
    somewhere disposable rather than in `clojure.core`, which is where an
    unbound `*ns*` otherwise resolves to at runtime. Per session, so that
-   concurrent tenants' defs and requires cannot collide. Idempotent, and
-   re-applied in full on every call: `create-ns` returns the existing
-   namespace, and re-referring keeps a scratch created by an older
-   remontoire current with the refers a newer one expects. A name the caller
-   has interned themselves is never replaced — their def wins, and Clojure
-   notes the rejection on *err*."
+   concurrent tenants' defs and requires cannot collide. The wiring — and
+   its idempotence — is `session/furnish-scratch!`'s, shared with the
+   named compartments `api/scratch!` mints."
   [session]
-  (binding [*ns* (create-ns (session/scratch-ns-sym session))]
-    ;; `create-ns` alone gives a namespace in which `+` does not resolve.
-    (refer-clojure)
-    ;; The composition surface is clojure.core *and* Quiescent (§5),
-    ;; spelled exactly as committed source spells it — the `q` alias plus
-    ;; the `q`-prefixed macros referred bare — correct here precisely
-    ;; because scratch is a namespace the session owns. Idioms thereby
-    ;; copy verbatim between evals, the Quiescent skill, and source
-    ;; files; outside scratch, aliasing Quiescent is the model's own act
-    ;; (§4). And `res` is how an id in one response becomes a value in
-    ;; the next expression — so scratch resolves them all from the start.
-    (require '[co.multiply.quiescent :as q
-               :refer [q qdo qjoin qfor qlet qmerge if-qlet when-qlet]]
-      '[co.multiply.remontoire.registry :refer [res evals]]
-      '[co.multiply.remontoire.api :as __r])
-    *ns*))
+  (session/furnish-scratch! (session/scratch-ns-sym session)))
 
 
 (defn- ensure-aliases!
