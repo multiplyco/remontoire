@@ -11,9 +11,11 @@
 (defn gated
   "Run `f` (element → task) over `coll` with at most `n` in flight:
    `(gated 8 expensive-check ids)` is the polite fan-out. Settles to
-   the results in collection order. The gate participates in structured
-   concurrency — cancelling the eval cancels the enqueued work with it,
-   nothing keeps running behind the brake."
+   the results in collection order. The gate is a coordinator, not an
+   owner: the gated tasks stay structured under this eval, so cancelling
+   the eval cancels the enqueued work — running and queued alike —
+   nothing keeps running behind the brake, and the gate itself is
+   untouched."
   [n f coll]
   (let [g (q/gate n)]
     (qfor [x coll]

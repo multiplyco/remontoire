@@ -490,3 +490,55 @@ server-controlled channel guaranteed to reach a genuinely fresh tenant. Hence: o
 fact with the judgment left where the knowledge is (`new session — (__r/manual) unless this conversation
 has`), burned only when the response carrying it actually goes out — a client that timed out was never
 nudged, the same delivery discipline as every mark.
+
+## 2026-08-14 — Gates die with their eval, exactly like tasks; the probe that said otherwise could not fail
+
+A field report from a tenant embedding Remontoire in a host application: a namespace-level
+`(def gate (q/gate n))`, re-created by an eval that drove the host's sweeping reload path (clj-reload),
+came back dead — the gate was born a child of the eval and cancelled with it. Verified here against
+quiescent 0.9.0, and extended to the narrower question the report left open: plain `(require ns :reload)`
+behaves identically. A probe namespace loaded via require inside an eval had its top-level task cancelled
+and its top-level gate's control-task cancelled at eval settle — within 205 ms by a compelled watcher.
+Parenthood is dynamic extent at creation; `def` lifts nothing out; every load path that re-evaluates def
+forms inside an eval mints eval-children. Boot and plain nREPL loads are safe for the same reason the
+eval chain is rooted (§9): no ambient task, so top-level resources are roots.
+
+Gates have no task-space escape, mechanically confirmed: `(q/compel (q/gate n))` throws
+IllegalArgumentException — compel accepts only Tasks — and the smuggle `@(q/compel (q/task (q/gate n)))`
+fails too, since the gate parents to the inner task and dies the moment *it* settles. The tenant
+conversation's mechanism-story ("compel insulates with a wrapper task") is falsified in the detail —
+there is no wrapper, there is a type error — while its conclusion stands stronger: tasks have two
+reload-safe shapes (compel at creation, capture the settled value), gates have exactly one — never
+re-create (`defonce`), or mint off-tree.
+
+Mid-trial this suite briefly "falsified" the report — several def'd gates read alive minutes after
+settle — and the falsification was itself falsified: the probe was
+`(try (q/gate-task g …) :alive (catch CancellationException …))`, and enqueue on a cancelled gate does
+not throw. It returns an already-cancelled task ("Gate cancelled.") whose exception surfaces only at
+deref, `get-now` or grounding — with a stack pointing at `Gate/enqueue`, the construction site, not the
+use site. Direct `isCancelled` on the control-task told the truth throughout: every gate dies promptly.
+A liveness probe that cannot fail reads as survival.
+
+That same property is the manual-worthy sharp edge, beyond the def-boundary gotcha itself: a dead gate
+is silent at the call border. `gate-task` succeeds, the task it returns is cancelled, and cancellation
+is a control signal — `then`/`catch`/`handle` never run, only `finally` sees it; grounding it cancels
+the surrounding expression instead of failing it. After a reload that re-created a def'd gate, every
+request through it evaporates as cancellation, invisible to error-shaped handling. Manual entry pending.
+
+## 2026-08-14 — Quiescent 0.10.0: gates leave the cancellation tree; the manual entry lands against it
+
+Upstream resolution of the 0.9.0 findings above, same day: Quiescent 0.10.0 makes the gate a pure
+coordinator — off the tree, no control-task, no `ICancellable`, `(cancel gate)` a type error — deleting
+both the reload trap and the silent-dead-gate mode outright rather than documenting them. Gated tasks are
+unchanged: structured under their creator, so cancelling a spawning eval still tears down exactly its own
+cohort while the gate, and other cohorts sharing it, run on. The taxonomy the release names — tasks and
+promises are work, mortal tree members; gates and semaphores are coordinators, immortal and safe to `def`
+globally — is the rule the manual now teaches in place of a gotcha list.
+
+Landed here: quiescent bumped to 0.10.0; the manual's implicit-qdo section gains the def-boundary
+paragraph (dynamic extent decides orphanhood, `def` lifts nothing out, reload paths driven by an eval mint
+eval-children; compel-at-creation or capture the settled value for tasks, coordinators exempt by design);
+`patterns/parallelism`'s `gated` reworded — its cancel-the-eval guarantee always flowed through the tasks'
+own parenthood and survives verbatim, only the justification changed. The eval tool description's
+overlapping claim ("spawned but not returned … cancelled by the time the eval settles") checked against
+the new manual text: refined, not contradicted; left as is.

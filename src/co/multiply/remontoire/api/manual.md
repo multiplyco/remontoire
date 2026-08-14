@@ -47,6 +47,14 @@ nobody returns or composes is an orphan: never waited on, and cancelled silently
 `(dotimes [_ 3] (q/sleep 100))` sleeps not at all. See the Quiescent documentation and the `iteration` pattern namespace
 for alternatives.
 
+Orphanhood is decided by the dynamic extent at creation and nothing else — `def` does not lift a task out of the tree.
+`(def worker (q/task …))` names a child: the var outlives the eval, the task inside it does not. The rule reaches
+through any load path an eval drives — `(require some.ns :reload)`, or a sweeping reloader — because reloading
+re-evaluates top-level forms inside your eval, so a task a reloaded `def` re-creates is born a child and cancelled with
+the call, however permanent it looks in source. Work that must outlive the eval is compelled at creation,
+`(q/compel (q/task …))`, or captured as a plain value once settled. Coordinators are exempt by design: a gate or
+semaphore is admission, not work — off the tree, immortal, safe to `def` globally (Quiescent 0.10.0 and later).
+
 ## Handles and retention
 
 Every response carries its eval's id. An id is a handle to work, not just to a result: compose on it before it settles —
