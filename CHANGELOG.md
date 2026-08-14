@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0 - 2026-08-14
+
+- Quiescent 0.10.0: gates leave the cancellation tree. A gate is now a pure coordinator, like
+  `semaphore` — off the tree, immortal, `(q/cancel gate)` a type error — so a top-level
+  `(def gate (q/gate n))` re-created through an eval-driven reload no longer dies with the eval, and
+  the silent-dead-gate mode (`gate-task` on a cancelled gate returning an already-cancelled task whose
+  `then`/`catch`/`handle` never ran) is no longer representable. Gated tasks are unchanged: structured
+  under their creator, so cancelling an eval still tears down exactly the work it enqueued — running or
+  queued — while the gate, and other work sharing it, run on.
+- The manual teaches the def boundary: orphanhood is decided by the dynamic extent at creation — `def`
+  lifts nothing out of the tree, and any load path an eval drives (`require :reload`, a sweeping
+  reloader) re-evaluates top-level forms inside the eval, so the tasks those defs re-create die with
+  the call. Compel at creation or capture the settled value for tasks; coordinators are exempt by
+  design. The `gated` recipe's docstring now attributes its cancel-the-eval guarantee to the tasks'
+  own parenthood, where it always lived.
+
 ## 0.6.0 - 2026-08-13
 
 - Scratch compartments: `(__r/scratch! "kbtest")` switches to a named scratch of the session's own,
