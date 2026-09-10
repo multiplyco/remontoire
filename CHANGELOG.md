@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1 - 2026-09-10
+
+- Update Scoped to 0.1.17: `(ask *var* default)` evaluates the default expression only when needed.
+
 ## 0.7.0 - 2026-08-14
 
 - Quiescent 0.10.0: gates leave the cancellation tree. A gate is now a pure coordinator, like

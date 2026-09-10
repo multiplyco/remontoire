@@ -26,7 +26,7 @@
          ;; Used directly for scope-carried output attribution (§11), not
          ;; just transitively through quiescent; keep the version in step
          ;; with quiescent's own dependency on it.
-         co.multiply/scoped      {:mvn/version "0.1.16"}
+         co.multiply/scoped      {:mvn/version "0.1.17"}
          clj-kondo/clj-kondo     {:mvn/version "2026.05.25"}
 
          ;; Provided by the consumer.
