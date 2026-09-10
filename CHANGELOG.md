@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2 - 2026-09-10
+
+- Update Quiescent to 0.11.2, bringing its gate fixes and retaining Scoped 0.1.17's lazy `ask` defaults.
+  Rely on Quiescent's transitive Scoped dependency instead of maintaining a separate version pin.
+
 ## 0.7.1 - 2026-09-10
 
 - Update Scoped to 0.1.17: `(ask *var* default)` evaluates the default expression only when needed.

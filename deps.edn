@@ -22,11 +22,7 @@
  ;; deployment without .clj files on disk needs neither.
  :deps  {org.clojure/data.json   {:mvn/version "2.5.2"}
          rewrite-clj/rewrite-clj {:mvn/version "1.2.55"}
-         co.multiply/quiescent   {:mvn/version "0.10.0"}
-         ;; Used directly for scope-carried output attribution (§11), not
-         ;; just transitively through quiescent; keep the version in step
-         ;; with quiescent's own dependency on it.
-         co.multiply/scoped      {:mvn/version "0.1.17"}
+         co.multiply/quiescent   {:mvn/version "0.11.2"}
          clj-kondo/clj-kondo     {:mvn/version "2026.05.25"}
 
          ;; Provided by the consumer.
