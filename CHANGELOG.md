@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.3 - 2026-09-11
+
+- Update Quiescent to 0.11.3.
+
 ## 0.7.2 - 2026-09-10
 
 - Update Quiescent to 0.11.2, bringing its gate fixes and retaining Scoped 0.1.17's lazy `ask` defaults.

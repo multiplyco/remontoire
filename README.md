@@ -47,7 +47,7 @@ resolves a single version for both.
 Add it from [Clojars](https://clojars.org/co.multiply/remontoire):
 
 ```clojure
-co.multiply/remontoire {:mvn/version "0.7.2"}
+co.multiply/remontoire {:mvn/version "0.7.3"}
 ```
 
 ## Starting the endpoint
