@@ -107,6 +107,13 @@ named compartment of your own under it, minted and wired like scratch on first u
 label is the same compartment thereafter. `(__r/scratch!)` returns to the main scratch, `(__r/scratches)` lists the
 family, and `retire-scratch!` removes a compartment.
 
+Scratch follows host reloads. A reloader that replaces namespace objects — clj-reload, tools.namespace — never touches
+scratch, so before each form, scratch's aliases, refers and imports are re-pointed at whatever replaced them, and the
+eval's output says when that happened. What you already made stays as it was: a `def` holds the value it was given, and
+a fn defined before the reload keeps calling the old code. An instance of a reloaded `deftype` or `defrecord` held from
+before fails host code that casts to the new class, as `X cannot be cast to X`. After a reload, re-evaluate the defs
+you still need.
+
 Hygiene worth starting from: work from scratch and reach into the system by qualified name — `#'their.ns/private-var`
 reads and calls even privates — leaving host namespaces as your visit found them. Moving in with `in-ns`, or requiring
 and `def`-ing into a namespace others own, is sometimes exactly what the job needs; it just rarely needs to be the

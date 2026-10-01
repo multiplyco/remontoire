@@ -20,6 +20,7 @@
    The scratch namespaces themselves — naming, furnishing, reaping — also
    live here: a session's scratch family is conversational state exactly
    like its sticky namespace, created on demand and gone with the session."
+  (:require [co.multiply.remontoire.rewire :as rewire])
   (:import [java.util UUID]))
 
 
@@ -128,15 +129,30 @@
    the existing namespace, and re-referring keeps a scratch created by an
    older remontoire current with the refers a newer one expects. A name
    the caller has interned themselves is never replaced — their def wins,
-   and Clojure notes the rejection on *err*."
+   and Clojure notes the rejection on *err*.
+
+   Rewired first: after a reload of a namespace the wiring names, `:as q`
+   would otherwise find `q` still naming the replaced object, and `alias`
+   refuses to rebind — every eval in the scratch would throw."
   [ns-sym]
   (binding [*ns* (create-ns ns-sym)]
+    (rewire/rewire! *ns*)
     (refer-clojure)
     (require '[co.multiply.quiescent :as q
                :refer [q qdo qjoin qfor qlet qmerge if-qlet when-qlet]]
       '[co.multiply.remontoire.registry :refer [res evals]]
       '[co.multiply.remontoire.api :as __r])
     *ns*))
+
+
+(defn scratch?
+  "Whether `ns-sym` belongs to a scratch family — any session's, the shared
+   one included. Remontoire's own namespaces: no reloader ever touches them,
+   which is why their mappings are rewired (§4) and a host's are not."
+  [ns-sym]
+  (let [base (str (scratch-ns-sym nil))
+        n    (str ns-sym)]
+    (or (= n base) (String/.startsWith n (str base ".")))))
 
 
 (defn scratch-nses

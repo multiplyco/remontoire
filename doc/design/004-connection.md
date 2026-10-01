@@ -183,6 +183,24 @@ eval(code, ns, await) → {:id :value :out :error :status}
       it): conversational state, same rule as the sticky namespace. An eval somehow still running there when its
       session expires fails loudly at its next form (`No namespace`) rather than working on in a ghost — accepted
       edge, visible not silent. The shared scratch is never removed.
+    - **Scratch follows host reloads, 2026-10-01** (`rewire`). A reloader that unloads with `remove-ns` loads each
+      file back into a new namespace object and reloads the host's dependents with it; scratch is not file-backed, so
+      its aliases, refers and imports went on naming what the reload replaced. Compiled code mostly escapes, because a
+      compiled fn finds its vars and classes again by name when its class loads. An interpreted top-level `def` init,
+      a bare class symbol and every macro expansion use the mapping's own object, so `(def x (alias/->T …))` after a
+      reload minted the old generation, and host code casting to the new class rejected it (measurements in the
+      logbook). So before every scratch form — per form, since the eval may be what reloaded — a stale mapping is
+      re-pointed at the registered namespace of the same name, that namespace's var of the same name, or the newest
+      class of the same name. Never dropped: a name unregistered mid-reload looks deleted, so its mapping waits for
+      the next form. A successor still loading is the right target anyway; what it lacks so far, qualified symbols
+      lack too. Atomic: one compare-and-set per Namespace table (`mappings`, `aliases`; package-private fields),
+      guarded per entry so a concurrent `def` or `require` wins. `alias` refuses to rebind, and `removeAlias` +
+      `addAlias` leaves a gap a concurrent compile falls into; `ensure-aliases!` uses the same swap for `__r`. The
+      furnishing rewires before it re-requires, or a `q` naming a replaced Quiescent would make `:as q` throw on every
+      eval. Host namespaces are their reloader's and never touched. Out of reach by design: a fn compiled before the
+      reload holds its vars in its own class, and a def holds its value. The eval's output says when anything was
+      re-pointed, so the caller knows to rebuild. No public hook: re-pointing that happens on every form, unasked,
+      beats a call each host must remember to wire.
     - Hygiene is *encouraged, not enforced* (instructions, 2026-08-05): work from scratch, reach into the system
       qualified — `#'their.ns/private-var` reads and calls privates without moving there — but `in-ns`/`require`/`def`
       into a host namespace stays available; a user request may legitimately need it, and forbidding it would put the

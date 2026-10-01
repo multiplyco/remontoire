@@ -6,10 +6,11 @@
   (:require [co.multiply.quiescent :as q]
     [co.multiply.remontoire.api]
     [co.multiply.remontoire.exception :as exception]
+    [co.multiply.remontoire.rewire :as rewire]
     [co.multiply.remontoire.session :as session]
     [co.multiply.remontoire.tee :as tee]
     [co.multiply.scoped :as sc])
-  (:import [clojure.lang LineNumberingPushbackReader Namespace]
+  (:import [clojure.lang LineNumberingPushbackReader]
     [java.io StringReader]))
 
 
@@ -34,12 +35,12 @@
    the host owns. Reasserted when it points anywhere else — a `__r` bound
    otherwise is a stale manual experiment, not a claim the invariant
    should yield to (observed 2026-08-04: a hand-aliased `__r` in the
-   REPL's own ns shadowed the API with a confusing `No such var`)."
+   REPL's own ns shadowed the API with a confusing `No such var`).
+   Swapped in one step, so a concurrent eval in `ns` never sees it absent."
   [ns]
   (let [assert! (fn [alias target]
                   (when-not (identical? target (get (ns-aliases ns) alias))
-                    (Namespace/.removeAlias ns alias)
-                    (Namespace/.addAlias ns alias target)))]
+                    (rewire/alias! ns alias target)))]
     (assert! '__r (the-ns 'co.multiply.remontoire.api))))
 
 
@@ -99,6 +100,11 @@
             ;; around the whole construction below.
             (binding [*ns*       (the-ns ns-sym), *file* "remontoire-eval",
                       tee/*bank* bank, session/*session* session]
+              ;; Per form, not per eval: the eval may be what reloaded the
+              ;; host, and the next form must already see the new world.
+              ;; Scratch only — a host namespace is its reloader's (§4).
+              (when (session/scratch? ns-sym)
+                (rewire/rewire! *ns*))
               (ensure-aliases! *ns*)
               ;; LineNumbering, not a plain PushbackReader: it attaches :line
               ;; and :column, so a compile error reports a position inside the
@@ -168,6 +174,8 @@
 
 (defn current-ns
   "Where `session`'s next un-namespaced call would land. For reporting
-   alongside an error, when `evaluate` threw before it could tell anyone."
+   alongside an error, when `evaluate` threw before it could tell anyone —
+   so it names the scratch without furnishing it: furnishing rewires, and
+   a rewire's notice belongs in an eval's output, not the host's console."
   [session]
-  (or (session/current-ns session) (ns-name (ensure-scratch! session))))
+  (or (session/current-ns session) (session/scratch-ns-sym session)))

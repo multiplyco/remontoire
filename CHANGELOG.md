@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.4 - 2026-10-01
+
+- Scratch namespaces follow host reloads. A reloader that replaces namespace objects (clj-reload, tools.namespace)
+  never touches scratch, so its aliases, refers and imports kept naming the replaced namespaces, vars and classes. A
+  `def` or macro evaluated through them after the reload used the old generation: for example, an instance of a
+  replaced `deftype` that host code then rejected as `X cannot be cast to X`. Before each form, a scratch's stale
+  mappings are now re-pointed at their replacements, atomically and without ever dropping one. The eval's output says
+  when this happens, since defs made before the reload may still hold the old code and values. Host namespaces are
+  untouched.
+- The `__r` alias is now reasserted in one atomic step, so a concurrent eval never finds it missing.
+- Update Quiescent to 0.11.5, which fixes by-name class lookups on its executor threads returning a stale generation of
+  a redefined `deftype` or `defrecord`.
+
 ## 0.7.3 - 2026-09-11
 
 - Update Quiescent to 0.11.3.
