@@ -12,11 +12,19 @@ otherwise. That one property sets the frame of mind:
 <!-- tasks -->
 - A long-running eval does not stall you. One still running after 10 s moves to the background as a task your client
   follows, and its result is delivered when it settles; keep working in the meantime. The task id names the registry
-  entry — task `bfw-12` is `(__r/res 12)` — so you can compose on the work while it runs.
+  entry — task `bfw-12` is `(__r/res 12)` — so you can compose on the work while it runs. Your client may track the
+  task under an id of its own as well; stopping it there cancels the eval, as `(q/cancel (__r/res 12))` does.
 <!-- end -->
-- Runaway work is never a crisis: cancel it by id. Concurrency is structured — tasks form a tree under their eval, and
-  cancellation cascades through everything the work spawned — so patterns an ordinary REPL forbids are routine here: a
-  polling loop with `Thread/sleep` in the body is fine, because you can always cancel it later.
+- Runaway work never costs you the REPL: cancel it by id. Concurrency is structured — tasks form a tree under their
+  eval, and cancellation cascades through everything the work spawned — so patterns an ordinary REPL forbids are
+  routine here: a polling loop with `Thread/sleep` in the body is fine, because you can always cancel it later.
+- Cancellation on the JVM is cooperative: it interrupts, and what a cancelled eval leaves behind is whatever its code
+  does on the way out. Work entangled with other systems is as cancellable as its cleanup makes it — cleanup that
+  releases or rolls back unwinds it fully: `try`/`finally` around a synchronous body, `q/finally` on a task (see the
+  `cleanup` pattern namespace). Without it, work stops wherever the interrupt lands. Before cancelling work with side effects in flight, reason about which of the two you are holding.
+- Blocking is cheap: an eval's virtual thread parks on `@`, `Thread/sleep` or blocking IO without tying up a platform
+  thread, and Quiescent's platform-park guard never fires on it. Leave `q/throw-on-platform-park!` alone — it is a
+  JVM-wide switch, not a setting for your eval.
 - Synchronous code evaluates exactly as you expect: imperatively, in order. Nothing is made async behind your back —
   async is opted into with Quiescent — and an async value you return (a Quiescent task, a `CompletableFuture`, a Clojure
   future; all auto-converted) extends the eval's lifetime: the eval settles when it does, and its result is what the
@@ -99,7 +107,8 @@ tags what other sessions minted, and `(__r/res id)` reaches it all, which is how
 Etiquette: read each other's settled work; leave a stranger's running entries to their owner. Your own session holds
 your current namespace and your delivery claims, and expires after 24 h of silence; `sessions` (the roster),
 `introduce!` (your line on it) and `release!` (the punctuation that marks a leg of work absorbed) are each a docstring
-away.
+away. A result you have read is absorbed already, so `release!` earns its call on results you never read and running
+work you are walking away from.
 
 Your scratch namespace is yours to `def` and `require` in freely — a namespace of your own, so nothing you mint collides
 with another tenant's. Its Quiescent wiring means one dialect everywhere: an idiom copies verbatim between the Quiescent

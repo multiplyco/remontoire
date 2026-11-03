@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.1 - 2026-11-03
+
+- The manual is clearer on four points that came up in use:
+  - Runaway work never costs you the REPL, but cancellation is cooperative. Work involving other systems unwinds
+    cleanly when its cleanup handles it: `try`/`finally` around a synchronous body, `q/finally` on a task.
+  - Deref and other blocking calls are safe in an eval, which runs on a virtual thread. Leave
+    `q/throw-on-platform-park!` alone; it is a JVM-wide switch.
+  - Clients that follow MCP tasks may track a task under an id of their own, and stopping it there cancels the eval.
+  - A result you have read is already absorbed, so `release!` matters only for unread results and running work you
+    abandon.
+
 ## 0.8.0 - 2026-11-03
 
 - Serve the stateless 2026-07-28 MCP revision beside the earlier ones, on the same endpoint. Clients that open with
