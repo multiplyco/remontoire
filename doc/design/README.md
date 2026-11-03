@@ -11,7 +11,7 @@ Revised 2026-07-31: transport, lifecycle and exposure settled — §4 rewritten,
 
 Split into one file per section 2026-08-07. The reference convention, here and throughout the codebase's docstrings
 and comments: **`§<n>` refers to the file numbered `<n>` in this directory** — the leading number is the reference
-(zero-padded on disk for sort order, so §4 is `004-connection.md`), the title after the dash is decorative. The dated record of builds, trials and smoke tests is [`../logbook.md`](../logbook.md).
+(zero-padded on disk for sort order, so §4 is `004-connection.md`), the title after the dash is decorative. The dated record of builds, trials and smoke tests is [`../logbook/`](../logbook/), one dated file per entry.
 
 1. [Premise](001-premise.md)
 2. [Architecture: one tool, many functions](002-architecture.md)

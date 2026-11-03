@@ -88,7 +88,7 @@
 - **Print-budget defaults** — purely empirical, to be learned from the first week of use.
 - ~~**The model API layer.**~~ Built 2026-08-04 — see §4; contents tuned in use since. The teaching surface's
   history — the `instructions` arc, the manual's delivery, and the smoke tests that shaped both — lives in the
-  logbook (`doc/logbook.md`), as do the test-suite freeze and the first in-situ smoke test.
+  logbook (`doc/logbook/`), as do the test-suite freeze and the first in-situ smoke test.
 - **The sessionless identity endpoint, `GET /probe` (2026-08-06, built for deployment rollouts).** Rollout
   context first, worth keeping: where each deployed app container joins the tailnet as its own ephemeral node
   via `tailscaled --tun=userspace-networking`, inbound tailnet connections are proxied to loopback — so the

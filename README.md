@@ -160,4 +160,4 @@ in-process it marks no session and simply prints the prose and returns the API o
 Every decision in this library was settled empirically against a live connection and recorded with its evidence in
 [doc/design/](doc/design/) — one file per section: binding and origin policy in §4, retention in §5, the eval model
 in §9, sessions and output attribution in §11. The dated record of the smoke tests and trials behind them is
-[doc/logbook.md](doc/logbook.md). When behavior surprises you, the design doc says why it is the way it is.
+[doc/logbook/](doc/logbook/), one dated file per entry. When behavior surprises you, the design doc says why it is the way it is.

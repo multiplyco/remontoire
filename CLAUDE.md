@@ -52,8 +52,8 @@ production X already uses"). Reasoning about deployment shapes is fine; using ou
 - Design decisions are settled empirically. Doctrine is folded into `doc/design/` — one file per section, and
   `§<n>` anywhere in the codebase or docs refers to the file numbered `<n>` there (zero-padded on disk, so §4 is
   `doc/design/004-connection.md`): the leading number is the reference, the title after the dash is decorative. Dated records — smoke-test findings, trials, measurements,
-  suite-falsified claims — are appended to `doc/logbook.md`, oldest first. The logbook is the record; keep
-  appending, don't rewrite history.
+  suite-falsified claims — go in `doc/logbook/`, one file per entry named `YYYY-MM-DD-NN-slug.md` (the
+  two-digit sequence orders a day's entries). The logbook is the record; add entries, don't rewrite history.
 - Prefer the in-process MCP eval tool (`mcp__remontoire__*`) for multi-line Clojure against the running system —
   never `clojure -M -e`.
 - Henrik's shell is fish.

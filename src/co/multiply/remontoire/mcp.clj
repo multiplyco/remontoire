@@ -548,7 +548,7 @@
 (defn- instructions
   "What every connecting client learns at initialize — deliberately lean,
    the third form of this surface (§4; the instructions arc in
-   `doc/logbook.md` carries the evidence): the eager channel is paid by every conversation in a
+   `doc/logbook/` carries the evidence): the eager channel is paid by every conversation in a
    project whether the REPL is used or not, goes stale against a
    hot-reloading server, and is first under the knife at context
    compaction — so it carries only what must be eager. *When*: the fit
