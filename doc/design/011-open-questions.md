@@ -269,3 +269,43 @@
   the dance (auth flow vs `initialize`) and which client storage remembers (credential store — durable — vs MCP
   session state — connection-lived).
 
+
+  **The modern-era design, settled pending measurement (2026-11-03).** The trigger named above — a modern client to
+  measure against — has arrived: Claude Code follows `io.modelcontextprotocol/tasks` against a server that answers
+  long work as tasks. Taking tasks means taking the stateless era (the extension is declared per request in
+  `_meta`, and that era has no `Mcp-Session-Id`), so the session question is no longer separable; it resolves to the
+  explicit-mint candidate. The design:
+
+  - *`create-session`*, the first call, mints the handle every other tool requires; a call without one, or with
+    one the server does not hold, is a tool error whose text teaches the incantation. Unknown handles are refused,
+    not adopted — a handle that outlives its session is the haunting the paragraph above names. The handle is
+    three random letters, redrawn against live sessions at mint: short to repeat per call, and sparse, which is
+    what an integer counter is not — in a dense space a typo or a pre-restart handle lands silently in a neighbour,
+    in a sparse one it misses and fails loudly. Guessability is irrelevant (the tailnet is the lock). Every footer
+    echoes it. MCP task ids are the handle plus the entry id (`ujw-12`); entry ids stay integers for `res`.
+  - *Capabilities are recorded at `create-session`* — for the teaching surface only: `(__r/manual)` serves the
+    variant matching what the session declared. What a client is *sent* follows each request's own `_meta`: the
+    tool list varies with the declaration on the `tools/list` request (which precedes any session), and whether a
+    call answers with a task follows that call's declaration — an undeclared request never receives one.
+  - *The principle: when the client follows tasks, trust its task machinery over Remontoire's own tools.* Waiting
+    and cancelling are the harness's business — await all, wake on any, stop — so a declaring client is listed
+    `create-session` and `eval` with `code` and `ns` only: no `await` parameter, no `await` or `cancel` tool. Listed
+    beside tasks, `await` would itself background and hand the model two handles to one piece of work. The
+    unlisted handlers stay live for clients holding a stale list, and the registry stays inspectable — `(evals)`,
+    `res`, `q/await`/`q/cancel` on an entry from eval — underneath, not instead.
+  - *A fixed 10 s grace replaces the caller's deadline:* anything settling inside it answers inline, anything longer
+    becomes a task — well inside every client timer measured (§4), so neither the 60 s first-byte limit nor the
+    120 s backgrounding is ever approached. `tasks/get` is a registry lookup: `working` while running, the eval's
+    latest output line as `statusMessage` (the heartbeat's display, carried over), `completed` with the rendering
+    the eval would have returned (`isError` for a failure), `cancelled` for cancellation; delivery marks fire after
+    the write as they do for any response, and a client-followed entry is left out of `;; settled` news.
+    `tasks/cancel` is a real `q/cancel`. `pollIntervalMs` 1000 — polling scales with running tasks, not connected
+    clients, and the interval only sets delivery latency. A task answer has no `content`; the entry id rides
+    `statusMessage` (`;; id 12 · running in the background`) so the model can bridge to the registry if the client
+    shows it.
+  - *Non-declaring modern clients* keep today's `running` path under the handle; legacy support can be dropped
+    once every client in use is confirmed to speak 2026-07-28.
+
+  To measure in the spike: whether Claude Code declares the extension on `tools/list` as well as `tools/call`; what
+  the model sees when a call becomes a task (does `statusMessage` reach it); whether TaskStop sends `tasks/cancel`;
+  the client's actual poll cadence; and, once, what a task answer after the client's own 120 s backgrounding does.

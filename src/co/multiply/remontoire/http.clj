@@ -20,7 +20,8 @@
     [com.sun.net.httpserver Headers HttpExchange HttpHandler HttpServer]
     [java.io IOException OutputStream]
     [java.net InetSocketAddress]
-    [java.nio.charset StandardCharsets]))
+    [java.nio.charset StandardCharsets]
+    [java.util Base64 Base64$Decoder]))
 
 
 (def ^:private json-content-type "application/json; charset=utf-8")
@@ -49,7 +50,11 @@
    premise is that escaping layers eat backslashes should not add a layer of its
    own for decoration (§1)."
   [x]
-  (json/write-str x :escape-slash false :escape-unicode false))
+  (json/write-str x :escape-slash false :escape-unicode false
+    ;; data.json writes a keyword key by its `name`, dropping the namespace
+    ;; the stateless era's `_meta` keys live by
+    ;; (`io.modelcontextprotocol/serverInfo`).
+    :key-fn #(if (keyword? %) (subs (str %) 1) (str %))))
 
 
 (defn- header
@@ -169,7 +174,10 @@
                            ;; is still there: open streams are
                            ;; liveness (§11), so a session mid-await
                            ;; can never expire under its own wait.
-                           (session/seen! sid)
+                           ;; Guarded: a stateless call's sid is a
+                           ;; tool argument, and a beat must never
+                           ;; mint the session a refused handle names.
+                           (session/refresh! sid)
                            true
                            (catch IOException _ false)))]
             (cond
@@ -191,8 +199,10 @@
    heartbeats while `compute` runs, then the response as the stream's one
    message, then close, which is the client's cue that the call is done.
    Returns the response when its write went out, nil when the client was
-   gone — the caller marks delivery only on the former."
-  [exchange progress-token sid display compute]
+   gone — the caller marks delivery only on the former. `announce?` gates
+   the tool-list announcement, which the stateless era replaces with
+   `ttlMs` on the list itself."
+  [exchange progress-token sid announce? display compute]
   (Headers/.set (HttpExchange/.getResponseHeaders exchange) "Content-Type" sse-content-type)
   ;; 0 = chunked: the stream stays open until the exchange closes.
   (HttpExchange/.sendResponseHeaders exchange 200 0)
@@ -208,7 +218,7 @@
         ;; promptly (measured 2026-08-04). Announced ahead of the response
         ;; and re-announced each stream until a `tools/list` actually lands
         ;; — losing one costs nothing.
-        (when (mcp/tools-changed? sid)
+        (when (and announce? (mcp/tools-changed? sid))
           (write! out (str "data: "
                         (encode {:jsonrpc "2.0"
                                  :method  "notifications/tools/list_changed"})
@@ -245,22 +255,76 @@
         (OutputStream/.write out bytes)))))
 
 
-(defn- serve!
-  "Parse and dispatch one POST body, choosing the response's shape: SSE when
-   the client accepts it and the payload waits (`tools/call`), plain JSON
-   otherwise. Either way, delivery marks land only after the write that
-   carried them went out (§5)."
-  [exchange]
-  (let [payload (json/read-str (slurp (HttpExchange/.getRequestBody exchange)
-                                 :encoding "UTF-8")
-                  :key-fn keyword)
-        sid     (session! exchange payload)
-        ;; getHostString, not getAddress: the string form without a reverse
-        ;; DNS lookup. The port is ephemeral and omitted — tailnet addresses
-        ;; are stable per device (§4), the host is the identity.
-        ctx     {:peer    (InetSocketAddress/.getHostString
-                            (HttpExchange/.getRemoteAddress exchange))
-                 :session sid}]
+(defn- decode-header-value
+  "Undo the spec's `=?base64?…?=` sentinel for a header value that could not
+   ride as plain ASCII (2026-07-28)."
+  [^String v]
+  (if (and v (str/starts-with? v "=?base64?") (str/ends-with? v "?=") (<= 11 (count v)))
+    (try
+      (let [^String encoded (subs v 9 (- (count v) 2))]
+        (String. ^bytes (Base64$Decoder/.decode (Base64/getDecoder) encoded) StandardCharsets/UTF_8))
+      (catch IllegalArgumentException _ nil))
+    v))
+
+
+(defn- modern-refusal
+  "Why a stateless request is malformed at the HTTP binding, as
+   `[code message]`, or nil. The headers restate the body so intermediaries
+   can route without parsing it, and a mismatch is refused (2026-07-28).
+   Notifications pass unchecked: nothing answers them either way."
+  [exchange payload]
+  (let [{:keys [id method params]} (when (map? payload) payload)
+        mcp-name (decode-header-value (header exchange "Mcp-Name"))]
+    (cond
+      (not (map? payload))
+      [-32600 "A stateless request is a single JSON-RPC message."]
+
+      (nil? id) nil
+
+      (not= mcp/protocol-version (get-in params [:_meta :io.modelcontextprotocol/protocolVersion]))
+      [-32020 "Header mismatch: MCP-Protocol-Version header does not match _meta protocolVersion."]
+
+      (not= method (header exchange "Mcp-Method"))
+      [-32020 "Header mismatch: Mcp-Method header does not match the body's method."]
+
+      (and (= "tools/call" method) (not= mcp-name (:name params)))
+      [-32020 "Header mismatch: Mcp-Name header must carry the tool name."]
+
+      (and (#{"tasks/get" "tasks/update" "tasks/cancel"} method) (not= mcp-name (:taskId params)))
+      [-32020 "Header mismatch: Mcp-Name header must carry the request's taskId."])))
+
+
+(defn- serve-modern!
+  "A stateless-era request (§11): no transport session — `create-session`
+   mints one as a tool, and each call names it in its arguments, which is
+   also the session the heartbeats keep fresh. Otherwise the legacy shape:
+   SSE for a `tools/call` when accepted, plain JSON else, delivery marks
+   only after the write that carried them."
+  [exchange payload peer]
+  (if-let [[code message] (modern-refusal exchange payload)]
+    (respond! exchange 400 json-content-type
+      (encode {:jsonrpc "2.0"
+               :id      (when (map? payload) (:id payload))
+               :error   {:code code :message message}}))
+    (let [ctx {:peer peer}
+          sid (get-in payload [:params :arguments :session-id])]
+      (if (and (accepts-sse? exchange) (= "tools/call" (:method payload)))
+        (let [display (atom nil)]
+          (some-> (respond-sse! exchange (progress-token payload) sid false display
+                    #(mcp/handle-modern payload (assoc ctx :display display)))
+            (mark-delivered!)))
+        (if-let [response (mcp/handle-modern payload ctx)]
+          (do (respond! exchange 200 json-content-type (encode response))
+            (mark-delivered! response))
+          (respond! exchange 202 nil nil))))))
+
+
+(defn- serve-legacy!
+  "A legacy-era request: the session rides `Mcp-Session-Id`, minted at
+   `initialize`."
+  [exchange payload peer]
+  (let [sid (session! exchange payload)
+        ctx {:peer peer :session sid}]
     (cond
       (nil? sid)
       (respond! exchange 400 "text/plain"
@@ -270,7 +334,7 @@
       ;; The display cell exists before the eval does — the heartbeat loop
       ;; starts first — so the handler fills it in once the bank is minted.
       (let [display (atom nil)]
-        (some-> (respond-sse! exchange (progress-token payload) sid display
+        (some-> (respond-sse! exchange (progress-token payload) sid true display
                   #(mcp/handle-payload payload (assoc ctx :display display)))
           (mark-delivered!)))
 
@@ -284,6 +348,24 @@
             (mark-delivered! response))
           ;; Notifications only: accepted, nothing to say back.
           (respond! exchange 202 nil nil))))))
+
+
+(defn- serve!
+  "Parse one POST body and serve it in its era — stateless when the
+   `MCP-Protocol-Version` header names the 2026-07-28 revision, legacy
+   otherwise; both on one endpoint, which the revision blesses (§11)."
+  [exchange]
+  (let [payload (json/read-str (slurp (HttpExchange/.getRequestBody exchange)
+                                 :encoding "UTF-8")
+                  :key-fn keyword)
+        ;; getHostString, not getAddress: the string form without a reverse
+        ;; DNS lookup. The port is ephemeral and omitted — tailnet addresses
+        ;; are stable per device (§4), the host is the identity.
+        peer    (InetSocketAddress/.getHostString
+                  (HttpExchange/.getRemoteAddress exchange))]
+    (if (= mcp/protocol-version (header exchange "MCP-Protocol-Version"))
+      (serve-modern! exchange payload peer)
+      (serve-legacy! exchange payload peer))))
 
 
 (defn- handle-exchange!

@@ -5,9 +5,15 @@ among its loaded namespaces and running state. Every eval executes as a task on 
 carried on the response — and because no eval ever holds the connection, you cannot block it, intentionally or
 otherwise. That one property sets the frame of mind:
 
+<!-- deadline -->
 - A long-running eval does not stall you. Control returns at your deadline, the work runs on, and you read the result
   when it settles. Keep evaluating in the meantime — later responses announce when earlier work settles — or, if you can
   run tool calls in the background, issue a long `await` and be notified.
+<!-- tasks -->
+- A long-running eval does not stall you. One still running after 10 s moves to the background as a task your client
+  follows, and its result is delivered when it settles; keep working in the meantime. The task id names the registry
+  entry — task `bfw-12` is `(__r/res 12)` — so you can compose on the work while it runs.
+<!-- end -->
 - Runaway work is never a crisis: cancel it by id. Concurrency is structured — tasks form a tree under their eval, and
   cancellation cascades through everything the work spawned — so patterns an ordinary REPL forbids are routine here: a
   polling loop with `Thread/sleep` in the body is fine, because you can always cancel it later.

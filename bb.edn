@@ -1,6 +1,6 @@
 {:tasks
- {dev             {:doc  "Start nREPL server"
-                   :task (shell "clj -M:dev -m nrepl.cmdline --interactive")}
+ {dev             {:doc  "Start Remontoire's MCP endpoint (127.0.0.1:7888) and an nREPL server"
+                   :task (shell "clj -M:dev -m co.multiply.remontoire.dev --interactive")}
 
   test            {:doc  "Run tests"
                    :task (shell (str "clj -M:test " (clojure.string/join " " *command-line-args*)))}

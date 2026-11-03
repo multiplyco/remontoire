@@ -6,6 +6,7 @@
   (:require
     [clojure.java.io :as io]
     [clojure.repl :as crepl]
+    [clojure.string :as str]
     [co.multiply.quiescent :as q]
     [co.multiply.remontoire.exception :as exception]
     [co.multiply.remontoire.outline :as outline]
@@ -23,6 +24,19 @@
   (sc/ask session/*session* nil))
 
 
+(defn- manual-text
+  "The manual's prose for a session whose client does (`tasks?`) or does
+   not follow MCP tasks (§11). Passages that differ are written both ways
+   in `manual.md`, between `<!-- deadline -->`, `<!-- tasks -->` and
+   `<!-- end -->` markers; the matching half is kept, markers dropped.
+   Slurped per call, so a local edit is live at once."
+  [tasks?]
+  (str/replace (slurp (io/resource "co/multiply/remontoire/api/manual.md"))
+    #"(?s)<!-- deadline -->\n(.*?)<!-- tasks -->\n(.*?)<!-- end -->\n"
+    ;; A replacement fn's return is quoted by `replace` itself.
+    (fn [[_ deadline tasks]] (if tasks? tasks deadline))))
+
+
 (defn manual
   "The manual, in one call — read it before your first real eval. Prints
    the prose half: the conceptual model of this environment. Reading it
@@ -34,7 +48,7 @@
    publics only, live from the running build (§4)."
   []
   (session/manual-read! (whoami))
-  (println (slurp (io/resource "co/multiply/remontoire/api/manual.md")))
+  (println (manual-text (:tasks (session/client (whoami)))))
   (-> (outline/outline 'co.multiply.remontoire.api {:include-docstrings true})
     (update :vars #(filterv (complement :private) %))))
 

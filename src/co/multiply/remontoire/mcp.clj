@@ -4,15 +4,15 @@
    Takes a parsed request map, returns a response map. No I/O and no transport
    concerns — which is what makes it testable without a socket."
   (:require [clojure.string :as str]
-            [co.multiply.quiescent :as q]
-            [co.multiply.remontoire.evaluate :as evaluate]
-            [co.multiply.remontoire.exception :as exception]
+    [co.multiply.quiescent :as q]
+    [co.multiply.remontoire.evaluate :as evaluate]
+    [co.multiply.remontoire.exception :as exception]
     ;; Not called from anywhere: loaded so the pattern namespaces exist
     ;; for the drilldown — `(__r/nses "patterns")` is their index.
-            [co.multiply.remontoire.patterns]
-            [co.multiply.remontoire.registry :as registry]
-            [co.multiply.remontoire.session :as session]
-            [co.multiply.remontoire.tee :as tee]))
+    [co.multiply.remontoire.patterns]
+    [co.multiply.remontoire.registry :as registry]
+    [co.multiply.remontoire.session :as session]
+    [co.multiply.remontoire.tee :as tee]))
 
 
 (def ^:private server-info
@@ -179,11 +179,14 @@
    judgment stays the model's; repeating it would spend this footer's
    credibility, the channel evictions and truncations must be believed
    on."
-  [{:keys [id note ns forms truncated settled evicted nudge]}]
+  [{:keys [id note ns forms truncated settled evicted nudge handle]}]
   (str ";; id " id
     (when note (str " · " note))
     " · ns " ns
     (when (and forms (> forms 1)) (str ", " forms " forms"))
+    ;; The stateless era's session handle rides every footer, so it is
+    ;; ambient rather than remembered (§11).
+    (when handle (str " · session " handle))
     (when-let [[n exact] truncated]
       (str "\n;; truncated — "
         (cond
@@ -200,107 +203,183 @@
     (when nudge "\n;; new session — (__r/manual) unless this conversation has")))
 
 
+(defn- report
+  "The response settled-or-not entry `entry` stands for, rendered for its
+   owner `session` — the eval's own response once its wait is over, and
+   what `tasks/get` delivers for an eval the client followed as a task, so
+   the two can never drift. Everything keys off `registry/status` — the
+   same triage `(evals)` shows a caller. `evicted` is the admission's own
+   losses; `handle` the stateless-era session handle the footer echoes
+   (§11), nil on the legacy wire."
+  [{:keys [id task details bank baseline] requested-ns :requested-ns} {:keys [session evicted handle]}]
+  (let [ns      requested-ns
+        status  (registry/status task)
+        ;; Minus this eval's own entry, which the response reports anyway —
+        ;; listed here would mean `running` earlier and settled since.
+        settled (news [id] session)
+        ;; Runs only after the transport writes the response (§5): a
+        ;; settled response delivers the outcome, admitting the entry to
+        ;; the evictable pool, and the news is marked told — but a client
+        ;; that timed out read neither, so the entry must stay owed,
+        ;; protected, and announceable.
+        ;; The unread check runs here, after the eval — so a first eval
+        ;; that reads the manual arrives already unmarked. Burned only
+        ;; in mark!, once the response has actually gone out: a client
+        ;; that never received the note was never nudged.
+        nudge   (and session
+                  (not (session/manual-read? session))
+                  (not (session/nudged? session)))
+        mark!   (fn []
+                  (when (not= :running status)
+                    (registry/touch! id))
+                  (registry/told! (mapv :id settled))
+                  (when nudge (session/nudged! session)))
+        line    (fn [opts]
+                  ;; The default ns is where this eval *started* — the
+                  ;; explicit request, else the session's sticky. Where it
+                  ;; has moved since is unknowable until eof records it,
+                  ;; so `:done` overrides with the truth from `details`;
+                  ;; the sticky alone misreported explicit-ns evals that
+                  ;; outlived their await (measured 2026-08-05).
+                  (footer (merge {:id      id
+                                  ;; An explicit ns that does not exist was
+                                  ;; never entered — `resolve-ns` refuses
+                                  ;; inside the task — and naming it here
+                                  ;; read as the session having moved
+                                  ;; (smoke test, 2026-08-06); the session's
+                                  ;; actual place is the truthful default.
+                                  :ns      (if (and (seq ns)
+                                                 (find-ns (symbol ns)))
+                                             ns
+                                             (evaluate/current-ns session))
+                                  :settled settled
+                                  :evicted evicted
+                                  :nudge   nudge
+                                  :handle  handle}
+                            opts)))
+        ;; What the eval printed, when it printed — present in every
+        ;; branch, because a `running` or `failed` eval's output is often
+        ;; the most informative thing about it. Value still first (§4).
+        out     (let [s (tee/text bank)]
+                  (when (seq s)
+                    (str ";; out\n" s
+                      (when-not (str/ends-with? s "\n") "\n"))))]
+    (-> (case status
+          :running
+          {:text (str out (line {:note (str "running — (res " id ") is the task")}))}
+
+          :cancelled
+          ;; This branch fires only when cancellation lands inside the
+          ;; await window — dominated by propagation: an eval that grounds
+          ;; a cancelled task is torn down with it, and a bare "cancelled"
+          ;; left a fresh tenant with no why (measured 2026-08-05). The
+          ;; exception's own message carries what provenance exists.
+          {:text (str out
+                   (line {:note (if-let [m (some-> (q/get-ex task) ex-message)]
+                                  (str "cancelled — " m)
+                                  "cancelled")}))}
+
+          :failed
+          {:text   (str (exception/render
+                          (exception/profile (q/get-ex task) @baseline))
+                     "\n" out (line {}))
+           :error? true}
+
+          :done
+          ;; Settled non-exceptionally ⇒ evaluate returned ⇒ details was
+          ;; delivered before the task settled — and its :ns is where this
+          ;; eval itself landed, where `current-ns` is whoever moved last.
+          (let [{:keys [ns forms]} @details
+                value    @task
+                ;; Render before mirroring: the printer realizes the
+                ;; cells, the mirror only revisits them.
+                rendered (render-value value)]
+            {:text (str rendered
+                     "\n" out (line {:ns        ns
+                                     :forms     forms
+                                     :truncated (elision value 1)}))}))
+      (assoc ::delivered mark!))))
+
+
+(def ^:private task-grace
+  "How long an eval from a client that follows MCP tasks runs inline before
+   it is answered with a task instead (§11). Fixed by the server, not the
+   caller: below it a result is as good as instantaneous, above it the
+   client's task machinery waits better than a held call does — and it
+   stays far inside every client timer measured (§4). `manual.md` states
+   the 10 s figure literally — a change here must update it by hand."
+  10000)
+
+
+(def ^:private task-poll-ms
+  "The poll interval suggested to a client following a task. A poll is a
+   registry lookup, and polling scales with running tasks, not connected
+   clients; the interval only sets delivery latency."
+  1000)
+
+
+(defn- task-id
+  "The MCP task id for entry `id` of session `sid`: `ujw-12`. The handle
+   prefix keeps an id minted before a restart from naming a new boot's
+   entry 12, which restarts at 1 (§11)."
+  [sid id]
+  (str sid "-" id))
+
+
+(defn- instant
+  [^java.util.Date d]
+  (str (java.util.Date/.toInstant d)))
+
+
+(defn- task-state
+  "The task fields for `entry` as it stands while it runs: the latest line
+   it printed is the status — the heartbeat's display, carried over (§4) —
+   under the registry id. Claude Code does not show the status to the model
+   (measured 2026-11-03); the bridge to `res` it relies on is the task id's
+   own shape, `bfw-12` naming entry 12."
+  [{:keys [id bank at] owner :session}]
+  (let [said (some->> (tee/text bank) str/split-lines (remove str/blank?) last)]
+    {:taskId         (task-id owner id)
+     :status         "working"
+     :statusMessage  (str ";; id " id " · running in the background — (res " id ") is the task"
+                       (when said (str "\n" said)))
+     :createdAt      (instant at)
+     :lastUpdatedAt  (instant at)
+     :ttlMs          nil
+     :pollIntervalMs task-poll-ms}))
+
+
 (defn- eval-handler
-  "Run, register, wait up to the bound, report. Everything after the wait
-   keys off `registry/status` — the same triage `(evals)` shows a caller."
-  [{:keys [code ns await]} {:keys [peer display session] ::keys [request-id]}]
+  "Run, register, wait up to the bound, report. A client that follows MCP
+   tasks waits the fixed `task-grace` instead of its own deadline, and an
+   eval still running then is answered with a task: the client follows it
+   with `tasks/get`, which delivers the response `report` renders. Once
+   the task answer is out, the entry is told — the client announces its
+   ending, so `;; settled` news never does (§11)."
+  [{:keys [code ns await]} {:keys [peer display session tasks? modern?] ::keys [request-id]}]
   (let [{:keys [task details baseline bank]} (evaluate/evaluate code ns session)
         {:keys [id evicted]}
-        (registry/capture! {:task     task
-                            :baseline baseline
-                            :bank     bank
-                            :peer     peer
-                            :session  session
-                            :at       (java.util.Date.)})]
+        (registry/capture! {:task         task
+                            :details      details
+                            :requested-ns ns
+                            :baseline     baseline
+                            :bank         bank
+                            :peer         peer
+                            :session      session
+                            :at           (java.util.Date.)})]
     ;; Point the transport's progress display at the bank before waiting, so
     ;; heartbeats can show the eval's latest output line while it runs (§4).
     (when display (reset! display bank))
-    (cancellable-await task (deadline await await-ms) request-id)
-    (let [status  (registry/status task)
-          ;; Minus this eval's own entry, which the response reports anyway —
-          ;; listed here would mean `running` earlier and settled since.
-          settled (news [id] session)
-          ;; Runs only after the transport writes the response (§5): a
-          ;; settled response delivers the outcome, admitting the entry to
-          ;; the evictable pool, and the news is marked told — but a client
-          ;; that timed out read neither, so the entry must stay owed,
-          ;; protected, and announceable.
-          ;; The unread check runs here, after the eval — so a first eval
-          ;; that reads the manual arrives already unmarked. Burned only
-          ;; in mark!, once the response has actually gone out: a client
-          ;; that never received the note was never nudged.
-          nudge   (and session
-                    (not (session/manual-read? session))
-                    (not (session/nudged? session)))
-          mark!   (fn []
-                    (when (not= :running status)
-                      (registry/touch! id))
-                    (registry/told! (mapv :id settled))
-                    (when nudge (session/nudged! session)))
-          line    (fn [opts]
-                    ;; The default ns is where this eval *started* — the
-                    ;; explicit request, else the session's sticky. Where it
-                    ;; has moved since is unknowable until eof records it,
-                    ;; so `:done` overrides with the truth from `details`;
-                    ;; the sticky alone misreported explicit-ns evals that
-                    ;; outlived their await (measured 2026-08-05).
-                    (footer (merge {:id      id
-                                    ;; An explicit ns that does not exist was
-                                    ;; never entered — `resolve-ns` refuses
-                                    ;; inside the task — and naming it here
-                                    ;; read as the session having moved
-                                    ;; (smoke test, 2026-08-06); the session's
-                                    ;; actual place is the truthful default.
-                                    :ns      (if (and (seq ns)
-                                                   (find-ns (symbol ns)))
-                                               ns
-                                               (evaluate/current-ns session))
-                                    :settled settled
-                                    :evicted evicted
-                                    :nudge   nudge}
-                              opts)))
-          ;; What the eval printed, when it printed — present in every
-          ;; branch, because a `running` or `failed` eval's output is often
-          ;; the most informative thing about it. Value still first (§4).
-          out     (let [s (tee/text bank)]
-                    (when (seq s)
-                      (str ";; out\n" s
-                        (when-not (str/ends-with? s "\n") "\n"))))]
-      (-> (case status
-            :running
-            {:text (str out (line {:note (str "running — (res " id ") is the task")}))}
-
-            :cancelled
-            ;; This branch fires only when cancellation lands inside the
-            ;; await window — dominated by propagation: an eval that grounds
-            ;; a cancelled task is torn down with it, and a bare "cancelled"
-            ;; left a fresh tenant with no why (measured 2026-08-05). The
-            ;; exception's own message carries what provenance exists.
-            {:text (str out
-                     (line {:note (if-let [m (some-> (q/get-ex task) ex-message)]
-                                    (str "cancelled — " m)
-                                    "cancelled")}))}
-
-            :failed
-            {:text   (str (exception/render
-                            (exception/profile (q/get-ex task) @baseline))
-                       "\n" out (line {}))
-             :error? true}
-
-            :done
-            ;; Settled non-exceptionally ⇒ evaluate returned ⇒ details was
-            ;; delivered before the task settled — and its :ns is where this
-            ;; eval itself landed, where `current-ns` is whoever moved last.
-            (let [{:keys [ns forms]} @details
-                  value    @task
-                  ;; Render before mirroring: the printer realizes the
-                  ;; cells, the mirror only revisits them.
-                  rendered (render-value value)]
-              {:text (str rendered
-                       "\n" out (line {:ns        ns
-                                       :forms     forms
-                                       :truncated (elision value 1)}))}))
-        (assoc ::delivered mark!)))))
+    (cancellable-await task (if tasks? task-grace (deadline await await-ms)) request-id)
+    (if (and tasks? (= :running (registry/status task)))
+      (do
+        ;; A task answer carries no text, so the admission's own losses
+        ;; wait for the session's next response like anyone else's.
+        (when (seq evicted) (session/note-evictions! session evicted))
+        {::task      (assoc (task-state (registry/entry id)) :resultType "task")
+         ::delivered #(registry/told! [id])})
+      (report (registry/entry id)
+        {:session session :evicted evicted :handle (when modern? session)}))))
 
 
 (defn- await-handler
@@ -369,45 +448,69 @@
                      (registry/told! reported))})))
 
 
+(def ^:private eval-async-deadline
+  "How eval's description explains long work where the caller's deadline
+   governs: the legacy wire, and stateless clients that do not follow tasks."
+  (str
+    "Every evaluation is captured in a rolling registry, and every "
+    "response carries its id — a handle to the work, usable before it "
+    "settles. A call still unfinished when its `await` deadline passes "
+    "(default 2 s, clamped to " (/ await-clamp 3600000) " h) returns "
+    "`running` while the work continues; follow-up work can be chained "
+    "onto the task meanwhile. When an eval that returned `running` "
+    "later settles, the next response notes it once "
+    "(`;; settled — 12 done`); the result waits, unread and protected, "
+    "until `(__r/res 12)` reads it.\n\n"))
+
+
+(def ^:private eval-async-tasks
+  "How eval's description explains long work to a client that follows MCP
+   tasks (§11): the grace is the server's, the waiting the client's."
+  (str "Every evaluation is captured in a rolling registry, and every "
+    "response carries its id — a handle to the work, usable before it "
+    "settles. A call still unfinished after " (quot task-grace 1000) " s "
+    "continues in the background as a task your client follows and "
+    "delivers when it settles. The task id names the registry entry — task "
+    "`bfw-12` is `(__r/res 12)` — so follow-up work can be chained onto it "
+    "while it runs.\n\n"))
+
+
+(defn- eval-description
+  [async]
+  (str "Evaluate Clojure code and return the value.\n\n"
+    "Evaluation continues in the namespace the previous call ended in, "
+    "starting in a scratch namespace of this session's own, pre-wired "
+    "with Quiescent. Pass `ns` to evaluate somewhere else; that "
+    "namespace must already exist. The namespace used is reported with "
+    "every result.\n\n"
+    async
+    "An eval is an implicit qdo: top-level forms run in order, and each "
+    "form's value is grounded before the next runs — a form returning a "
+    "task runs to completion and its value is what is captured. Only the "
+    "last form's value is returned; batch independent probes in a vector "
+    "or labeled map. Grounding walks the whole value, so a returned "
+    "infinite seq never settles — work with them freely, return them "
+    "bounded. Tasks "
+    "spawned but not returned are children and are cancelled by the time "
+    "the eval settles — silently. Work that must outlive the call needs "
+    "`(q/compel (q/task …))`, or better: let the eval itself be the "
+    "long-running work and use its id.\n\n"
+    "Printed output — `*err*` included, interleaved — is captured per "
+    "eval, attributed across its whole "
+    "task tree and returned under `;; out`; while an eval runs, its "
+    "latest output line is the progress message, so a `println` "
+    "mid-work is a live status report. The remontoire API is aliased "
+    "as `__r` in every namespace an eval runs in — "
+    "`(__r/manual)` is the manual; read it before your first real "
+    "eval. `__r` is for eval code only — never write it into source "
+    "files."))
+
+
 (def tools
   "The tool table. Each entry is its own MCP declaration plus a :handler,
    which is stripped before the entry is sent to the client."
   [{:name        "eval"
-    :description (str "Evaluate Clojure code and return the value.\n\n"
-                   "Evaluation continues in the namespace the previous call ended in, "
-                   "starting in a scratch namespace of this session's own, pre-wired "
-                   "with Quiescent. Pass `ns` to evaluate somewhere else; that "
-                   "namespace must already exist. The namespace used is reported with "
-                   "every result.\n\n"
-                   "Every evaluation is captured in a rolling registry, and every "
-                   "response carries its id — a handle to the work, usable before it "
-                   "settles. A call still unfinished when its `await` deadline passes "
-                   "(default 2 s, clamped to " (/ await-clamp 3600000) " h) returns "
-                   "`running` while the work continues; follow-up work can be chained "
-                   "onto the task meanwhile. When an eval that returned `running` "
-                   "later settles, the next response notes it once "
-                   "(`;; settled — 12 done`); the result waits, unread and protected, "
-                   "until `(__r/res 12)` reads it.\n\n"
-                   "An eval is an implicit qdo: top-level forms run in order, and each "
-                   "form's value is grounded before the next runs — a form returning a "
-                   "task runs to completion and its value is what is captured. Only the "
-                   "last form's value is returned; batch independent probes in a vector "
-                   "or labeled map. Grounding walks the whole value, so a returned "
-                   "infinite seq never settles — work with them freely, return them "
-                   "bounded. Tasks "
-                   "spawned but not returned are children and are cancelled by the time "
-                   "the eval settles — silently. Work that must outlive the call needs "
-                   "`(q/compel (q/task …))`, or better: let the eval itself be the "
-                   "long-running work and use its id.\n\n"
-                   "Printed output — `*err*` included, interleaved — is captured per "
-                   "eval, attributed across its whole "
-                   "task tree and returned under `;; out`; while an eval runs, its "
-                   "latest output line is the progress message, so a `println` "
-                   "mid-work is a live status report. The remontoire API is aliased "
-                   "as `__r` in every namespace an eval runs in — "
-                   "`(__r/manual)` is the manual; read it before your first real "
-                   "eval. `__r` is for eval code only — never write it into source "
-                   "files.")
+    :description (eval-description eval-async-deadline)
     :inputSchema {:type       "object"
                   :properties {:code  {:type        "string"
                                        :description "Clojure code to evaluate."}
@@ -501,8 +604,10 @@
 
 
 (defn- error
-  [id code message]
-  {:jsonrpc "2.0" :id id :error {:code code :message message}})
+  ([id code message]
+   {:jsonrpc "2.0" :id id :error {:code code :message message}})
+  ([id code message data]
+   (assoc-in (error id code message) [:error :data] data)))
 
 
 (defn- text
@@ -635,27 +740,35 @@
       returned)))
 
 
+(defn- call-tool
+  "Run tool `tool-name` from `index` for request `id` — both eras' tool
+   call once the session is established. A tool that throws is not a
+   protocol error: it is a result the model is meant to see and react to,
+   so it comes back as :isError rather than as a JSON-RPC error. A handler
+   answering with a task (`::task`) is answered with that task, which
+   carries no content and so no news."
+  [id {tool-name :name :keys [arguments]} ctx index]
+  (if-let [{:keys [handler]} (index tool-name)]
+    (try
+      (let [returned (handler arguments (assoc (or ctx {}) ::request-id id))
+            task     (when (map? returned) (::task returned))
+            returned (cond-> returned (not task) (with-eviction-news (:session ctx)))
+            response (result id (if task task (content returned)))]
+        ;; As metadata, so it can never leak into the JSON: the transport
+        ;; calls it once the response is actually written (§5) — unless
+        ;; the client cancelled this request, in which case nobody reads
+        ;; what gets written and nothing may be marked.
+        (if-let [mark! (and (not (aborted? id)) (map? returned) (::delivered returned))]
+          (with-meta response {::delivered mark!})
+          response))
+      (catch Throwable t
+        (result id {:content (text (str (Class/.getName (class t)) ": " (ex-message t)))
+                    :isError true})))
+    (error id -32602 (str "Unknown tool: " tool-name))))
+
+
 (defmethod handle "tools/call" [{:keys [id params] ::keys [ctx]}]
-  (let [{tool-name :name :keys [arguments]} params]
-    (if-let [{:keys [handler]} (by-name tool-name)]
-      ;; A tool that throws is not a protocol error: it is a result the model
-      ;; is meant to see and react to, so it comes back as :isError rather
-      ;; than as a JSON-RPC error.
-      (try
-        (let [returned (-> (handler arguments (assoc (or ctx {}) ::request-id id))
-                         (with-eviction-news (:session ctx)))
-              response (result id (content returned))]
-          ;; As metadata, so it can never leak into the JSON: the transport
-          ;; calls it once the response is actually written (§5) — unless
-          ;; the client cancelled this request, in which case nobody reads
-          ;; what gets written and nothing may be marked.
-          (if-let [mark! (and (not (aborted? id)) (map? returned) (::delivered returned))]
-            (with-meta response {::delivered mark!})
-            response))
-        (catch Throwable t
-          (result id {:content (text (str (Class/.getName (class t)) ": " (ex-message t)))
-                      :isError true})))
-      (error id -32602 (str "Unknown tool: " tool-name)))))
+  (call-tool id params ctx by-name))
 
 
 (defmethod handle :default [{:keys [id method]}]
@@ -687,3 +800,226 @@
    (if (sequential? payload)
      (seq (into [] (keep #(handle-message % ctx)) payload))
      (handle-message payload ctx))))
+
+
+;; # The stateless era (2026-07-28)
+;; ################################################################################
+;;
+;; Served beside the legacy wire on the same endpoint, era chosen by the
+;; transport from the `MCP-Protocol-Version` header (§11). No `initialize`,
+;; no `Mcp-Session-Id`: the session is a handle `create-session` mints and
+;; every other tool takes as `session-id`; capabilities ride each request's
+;; `_meta`. A client declaring the tasks extension is listed only
+;; `create-session` and `eval`, and long evals answer as tasks — when the
+;; client follows tasks, its machinery is trusted over Remontoire's own
+;; `await` and `cancel`, which stay callable but unlisted.
+
+(def protocol-version
+  "The stateless revision this server speaks beside the legacy handshake."
+  "2026-07-28")
+
+
+(def ^:private legacy-versions
+  ["2025-11-25" "2025-06-18" "2025-03-26"])
+
+
+(def ^:private tasks-extension
+  :io.modelcontextprotocol/tasks)
+
+
+(defn- declares-tasks?
+  "Whether a request's `params` declare the tasks extension — per request,
+   so what the client receives always matches what that request said."
+  [params]
+  (contains? (get-in params [:_meta :io.modelcontextprotocol/clientCapabilities :extensions])
+    tasks-extension))
+
+
+(defn- create-session-handler
+  "Mint a handle and record what the client declared — the first call, so
+   the session knows its client's capabilities from birth; they shape the
+   teaching surface, never what a request is sent."
+  [_ {:keys [meta]}]
+  (let [sid (session/mint-handle!)]
+    (session/client! sid
+      {:protocolVersion (:io.modelcontextprotocol/protocolVersion meta)
+       :clientInfo      (:io.modelcontextprotocol/clientInfo meta)
+       :capabilities    (:io.modelcontextprotocol/clientCapabilities meta)
+       :tasks           (contains? (get-in meta [:io.modelcontextprotocol/clientCapabilities :extensions])
+                          tasks-extension)})
+    {:text (str "Session " sid " — pass \"session-id\": \"" sid "\" to every other remontoire tool.\n"
+             "It holds this conversation's scratch namespace, current namespace and unread "
+             "results. It expires after a day of silence and does not survive a server "
+             "restart; when an id is refused, create a new session.")}))
+
+
+(def ^:private create-session-tool
+  {:name        "create-session"
+   :description (str "Start a Remontoire session and return its id. Call this first: every "
+                  "other tool requires the id as `session-id`. A session holds this "
+                  "conversation's scratch namespace, current namespace and unread results.")
+   :inputSchema {:type "object" :properties {}}
+   :handler     create-session-handler})
+
+
+(defn- with-session-id
+  [tool]
+  (-> tool
+    (assoc-in [:inputSchema :properties :session-id]
+      {:type        "string"
+       :description "The session id `create-session` returned."})
+    (update-in [:inputSchema :required] (fnil conj []) "session-id")))
+
+
+(def ^:private modern-by-name
+  "Every stateless-era tool, listed or not — a client holding a list from
+   before its declaration changed can still call what it holds."
+  (into {"create-session" create-session-tool}
+    (map (juxt :name with-session-id))
+    tools))
+
+
+(defn- modern-declarations
+  "The tool list for a stateless request: with the tasks extension declared,
+   `create-session` and an `eval` without a deadline; otherwise all of it,
+   each tool taking `session-id`."
+  [tasks?]
+  (let [listed (if tasks?
+                 [(-> (by-name "eval")
+                    (assoc :description (eval-description eval-async-tasks))
+                    (update-in [:inputSchema :properties] dissoc :await))]
+                 tools)]
+    (into [(dissoc create-session-tool :handler)]
+      (map (comp #(dissoc % :handler) with-session-id))
+      listed)))
+
+
+(defn- modern-instructions
+  []
+  (str (instructions)
+    " Call create-session first and pass its id as `session-id` to every other tool."))
+
+
+(defn- refusal
+  [sid]
+  (if (string? sid)
+    (str "Session " (pr-str sid) " is not live on this server — it expired, or was "
+      "minted before a restart. Call create-session for a new one.")
+    "No `session-id` — call create-session first and pass its id to every other tool."))
+
+
+(defn- modern-call
+  "A stateless `tools/call`: `create-session` needs no session; every other
+   tool requires a live one, and an unknown handle is refused, never adopted
+   (§11) — the refusal teaches the incantation."
+  [id {tool-name :name :keys [arguments] :as params} ctx]
+  (let [sid (:session-id arguments)]
+    (cond
+      (or (= "create-session" tool-name) (nil? (modern-by-name tool-name)))
+      (call-tool id params ctx modern-by-name)
+
+      (and (string? sid) (session/live? sid))
+      (do (session/seen! sid)
+        (call-tool id (update params :arguments dissoc :session-id)
+          (assoc ctx :session sid) modern-by-name))
+
+      :else
+      (result id {:content (text (refusal sid)) :isError true}))))
+
+
+(defn- followed-entry
+  "The registry entry task `task-id` names, or nil. The id's handle must be
+   the entry's owner: entry ids restart at 1 with the JVM, and a task id
+   from before a restart must name nothing rather than a stranger's eval."
+  [task-id]
+  (let [[_ sid n] (when (string? task-id) (re-matches #"([a-z]{3})-(\d+)" task-id))
+        entry     (when n
+                    (try (registry/entry (parse-long n))
+                      (catch clojure.lang.ExceptionInfo _ nil)))]
+    (when (and entry (= sid (:session entry)))
+      entry)))
+
+
+(defn- task-get
+  "The state of a followed eval. A settled one is answered with the response
+   `report` renders — the eval's own, as it would have come inline — and
+   its delivery marks ride the write like any response's (§5); polling a
+   settled task again re-renders the same outcome. A poll is liveness: a
+   session with work in the background is not silent."
+  [id {:keys [task] owner :session :as entry}]
+  (session/refresh! owner)
+  (let [status (registry/status task)]
+    (if (= :running status)
+      (result id (task-state entry))
+      (let [returned (-> (report entry {:session owner :evicted [] :handle owner})
+                       (with-eviction-news owner))
+            done     (assoc (task-state entry)
+                       :lastUpdatedAt (str (java.time.Instant/now)))]
+        (with-meta
+          (result id (if (= :cancelled status)
+                       (assoc done :status "cancelled" :statusMessage (:text returned))
+                       (assoc done :status "completed" :result (content returned))))
+          {::delivered (::delivered returned)})))))
+
+
+(defn- task-method
+  [id method {:keys [taskId]}]
+  (if-let [{entry-id :id :keys [task] :as entry} (followed-entry taskId)]
+    (case method
+      "tasks/get" (task-get id entry)
+      ;; Remontoire's evals can be stopped, so cancel is real — and, like
+      ;; the `cancel` tool, it delivers the ending it authors: nobody reads
+      ;; a task they deliberately killed (§5).
+      "tasks/cancel" (do (q/cancel task)
+                       (with-meta (result id {}) {::delivered #(registry/touch! entry-id)}))
+      "tasks/update" (result id {}))
+    (error id -32602 "Task not found.")))
+
+
+(defn- complete
+  "Every stateless result names its kind and the server (2026-07-28)."
+  [response]
+  (if (contains? response :result)
+    (-> response
+      (update :result #(cond-> % (not (:resultType %)) (assoc :resultType "complete")))
+      (assoc-in [:result :_meta :io.modelcontextprotocol/serverInfo] server-info))
+    response))
+
+
+(defn handle-modern
+  "One stateless-era message, already past the transport's header checks.
+   Returns the response, or nil for a notification."
+  [{:keys [id method params]} ctx]
+  (let [tasks? (declares-tasks? params)
+        ctx    (assoc ctx :modern? true :tasks? tasks? :meta (:_meta params))]
+    (if (nil? id)
+      (do (when (= "notifications/cancelled" method)
+            (cancel-request! (:requestId params)))
+        nil)
+      (complete
+        (case method
+          "server/discover"
+          (result id {:supportedVersions (into [protocol-version] legacy-versions)
+                      :capabilities      {:tools {} :extensions {tasks-extension {}}}
+                      :instructions      (modern-instructions)
+                      :ttlMs             300000
+                      :cacheScope        "public"})
+
+          "ping" (result id {})
+
+          ;; Varies with this request's declaration, hence private; short,
+          ;; because a reloaded tool table has no other way to reach a
+          ;; stateless client.
+          "tools/list" (result id {:tools      (modern-declarations tasks?)
+                                   :ttlMs      60000
+                                   :cacheScope "private"})
+
+          "tools/call" (modern-call id params ctx)
+
+          ("tasks/get" "tasks/update" "tasks/cancel")
+          (if tasks?
+            (task-method id method params)
+            (error id -32021 "Missing required client capability"
+              {:requiredCapabilities {:extensions {tasks-extension {}}}}))
+
+          (error id -32601 (str "Method not found: " method)))))))

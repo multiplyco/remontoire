@@ -72,6 +72,44 @@
   (seen! (str (UUID/randomUUID))))
 
 
+(def ^:private handle-letters
+  "Consonants only, so a handle never spells a word: 20³ = 8000 handles."
+  "bcdfghjklmnpqrstvwxz")
+
+
+(defn mint-handle!
+  "A fresh session for the stateless era (§11), born now, named by three
+   random consonants the model passes as an ordinary tool argument. Redrawn
+   against live sessions, so a collision is only ever with a handle from a
+   previous boot — and the space is sparse, so a typo or a stale handle
+   almost always names nothing and is refused loudly, where a counter's
+   dense space would land it silently in a neighbour."
+  []
+  (loop []
+    (let [h        (apply str (repeatedly 3 #(rand-nth handle-letters)))
+          [before] (swap-vals! state
+                     (fn [m] (if (contains? m h) m (assoc-in m [h :last-seen] (now)))))]
+      (if (contains? before h) (recur) h))))
+
+
+(defn live?
+  "Whether `sid` names a session this server holds. The stateless era
+   refuses what the legacy era adopts: a handle is a tool argument, and an
+   unknown one is a stale or mistyped one (§11)."
+  [sid]
+  (contains? @state sid))
+
+
+(defn refresh!
+  "Refresh `sid`'s last-seen stamp only if it is live — liveness evidence
+   that arrives without a request establishing the session (a heartbeat
+   write, a task poll) must never mint one."
+  [sid]
+  (swap! state
+    (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :last-seen] (now)))))
+  nil)
+
+
 (defn scratch-ns-sym
   "The scratch namespace `sid`'s evals start in. Per session, so two
    tenants' defs and requires cannot collide — named by the same 8-char id

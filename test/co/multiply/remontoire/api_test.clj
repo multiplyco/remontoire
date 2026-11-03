@@ -25,6 +25,21 @@
       "reading marks the session as informed")))
 
 
+(deftest manual-follows-the-sessions-task-support
+  ;; Recorded at create-session (§11); the variant markers never leak.
+  (let [read-as (fn [tasks?]
+                  (let [sid (session/mint-handle!)]
+                    (session/client! sid {:tasks tasks?})
+                    (binding [session/*session* sid]
+                      (with-out-str (api/manual)))))
+        tasks   (read-as true)
+        legacy  (read-as false)]
+    (is (not= tasks legacy) "the two clients read different passages")
+    (is (not-any? #(re-find #"<!--" %) [tasks legacy]))
+    (is (= (count (re-seq #"(?m)^## " tasks)) (count (re-seq #"(?m)^## " legacy)))
+      "only passages vary, never the manual's structure")))
+
+
 (deftest manual-tolerates-the-sessionless-caller
   ;; A human at the actual REPL: no session on the rails, and the call
   ;; still works — the mark is simply a no-op.

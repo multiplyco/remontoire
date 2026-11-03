@@ -37,19 +37,22 @@
 
 
 (defn- build
-  ^HttpRequest [body {:keys [sid accept origin method]}]
+  ^HttpRequest [body {:keys [sid accept origin method headers]}]
   (let [builder (HttpRequest/newBuilder (URI/create *url*))]
     (case (or method :post)
       :post (-> builder
               (HttpRequest$Builder/.header "Content-Type" "application/json")
               (HttpRequest$Builder/.POST
-                (HttpRequest$BodyPublishers/ofString (json/write-str body))))
+                (HttpRequest$BodyPublishers/ofString
+                  ;; Namespaced keys kept, as a 2026-07-28 client's `_meta` has them.
+                  (json/write-str body :key-fn #(if (keyword? %) (subs (str %) 1) (str %))))))
       :get (HttpRequest$Builder/.GET builder)
       :delete (HttpRequest$Builder/.method builder "DELETE"
                 (HttpRequest$BodyPublishers/noBody)))
     (when sid (HttpRequest$Builder/.header builder "Mcp-Session-Id" sid))
     (when accept (HttpRequest$Builder/.header builder "Accept" accept))
     (when origin (HttpRequest$Builder/.header builder "Origin" origin))
+    (doseq [[k v] headers] (HttpRequest$Builder/.header builder k v))
     (HttpRequest$Builder/.build builder)))
 
 
@@ -249,3 +252,57 @@
   (let [sid (initialize!)]
     (is (= 204 (HttpResponse/.statusCode (send! nil {:method :delete :sid sid}))))
     (is (not-any? #(= sid (:sid %)) (session/roster)))))
+
+
+;; # The stateless era
+;; ################################################################################
+
+(def ^:private tasks-meta
+  {:io.modelcontextprotocol/protocolVersion    "2026-07-28"
+   :io.modelcontextprotocol/clientInfo         {:name "http-suite" :version "0"}
+   :io.modelcontextprotocol/clientCapabilities {:extensions {:io.modelcontextprotocol/tasks {}}}})
+
+
+(defn- modern!
+  "A stateless request with its headers restating the body, as a 2026-07-28
+   client sends it. `override` replaces headers to provoke mismatches."
+  ([method params] (modern! method params nil))
+  ([method params override]
+   (let [named (case method
+                 "tools/call" (:name params)
+                 ("tasks/get" "tasks/cancel" "tasks/update") (:taskId params)
+                 nil)]
+     (send! {:jsonrpc "2.0" :id 7 :method method
+             :params  (assoc params :_meta tasks-meta)}
+       {:headers (merge (cond-> {"MCP-Protocol-Version" "2026-07-28"
+                                 "Mcp-Method"           method}
+                          named (assoc "Mcp-Name" named))
+                   override)}))))
+
+
+(deftest stateless-requests-need-no-transport-session
+  (let [discover (modern! "server/discover" {})
+        body     (parsed discover)]
+    (is (= 200 (HttpResponse/.statusCode discover)))
+    (is (nil? (header-of discover "Mcp-Session-Id")))
+    (is (contains? (get-in body [:result :capabilities :extensions])
+          :io.modelcontextprotocol/tasks)
+      "namespaced keys survive encoding")
+    (is (some? (get-in body [:result :_meta :io.modelcontextprotocol/serverInfo])))))
+
+
+(deftest stateless-sessions-are-minted-by-a-tool
+  (let [created (parsed (modern! "tools/call" {:name "create-session" :arguments {}}))
+        sid     (second (re-find #"\"session-id\": \"([a-z]{3})\"" (text-of created)))
+        evald   (parsed (modern! "tools/call" {:name      "eval"
+                                               :arguments {:code "(+ 40 2)" :session-id sid}}))]
+    (is (some? sid))
+    (is (str/starts-with? (text-of evald) "42"))
+    (is (str/includes? (text-of evald) (str "session " sid)) "the footer echoes the handle")))
+
+
+(deftest stateless-headers-must-restate-the-body
+  (is (= 400 (HttpResponse/.statusCode
+               (modern! "tools/call" {:name "eval" :arguments {}} {"Mcp-Name" "cancel"}))))
+  (is (= 400 (HttpResponse/.statusCode
+               (modern! "tools/list" {} {"Mcp-Method" "tools/call"})))))
