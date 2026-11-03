@@ -12,19 +12,25 @@ more precisely than file search.
 The agent teaches itself. The connection greets it with a short note on what Remontoire is for and one instruction — run
 `(__r/manual)` before the first real eval — and the manual arrives from the running server: the conceptual model as
 prose, the API reference as live data, always the truth of the build actually running. You write no prompt glue and
-maintain no documentation for it; a session that skips the manual is told so on every response until it reads it.
+maintain no documentation for it; a session that skips the manual is reminded once.
 
 ## What the agent gets
 
-Three MCP tools, and a library of ordinary Clojure functions called through the first of them:
+A few MCP tools, and a library of ordinary Clojure functions called through `eval`:
 
 - **`eval`** — namespace-aware evaluation. Every eval runs as a [Quiescent](https://github.com/multiplyco/quiescent)
-  task under a registry id carried on the response: work that outlasts the call's deadline returns `running` and
-  continues, and the id is a live handle — compose on it, cancel it, read its value later. Printed output is captured
+  task under a registry id carried on the response, and the id is a live handle — compose on it, cancel it, read its
+  value later. Work that outlasts the call keeps running: a client that supports MCP tasks gets it as a background task
+  after 10 s, delivered when it settles; other clients get `running` at the call's deadline. Printed output is captured
   per eval and attributed across its whole task tree; while an eval runs, its latest printed line is the live progress
   message.
 - **`await`** — wait for ids to settle, with a mandatory deadline.
 - **`cancel`** — cancel ids, cooperatively, and report where each stands.
+- **`create-session`** — for clients speaking the stateless 2026-07-28 MCP revision, which carries no transport
+  session: called first, and its id passed to every other tool.
+
+`await` and `cancel` are offered only to clients without MCP task support; with it, the client's own task handling
+waits and stops. Clients that open with `initialize` get the earlier revisions' handshake and no `create-session`.
 
 Inside evals, the toolkit is the `__r` namespace, aliased everywhere the agent goes: `nses`, `vars`, `outline`, `doc`,
 `source` and `file` for navigation; `res`, `evals`, `out` and `failure` for the registry; `sessions`, `introduce!`
@@ -47,7 +53,7 @@ resolves a single version for both.
 Add it from [Clojars](https://clojars.org/co.multiply/remontoire):
 
 ```clojure
-co.multiply/remontoire {:mvn/version "0.7.4"}
+co.multiply/remontoire {:mvn/version "0.8.0"}
 ```
 
 ## Starting the endpoint
@@ -81,7 +87,7 @@ and post-deploy sanity. Plain JSON, no session minted, no state touched:
 
 ```
 $ curl http://127.0.0.1:7888/probe
-{"server":"remontoire","version":"0.1.3","describe":"the production system behind multiply.co"}
+{"server":"remontoire","version":"0.8.0","describe":"the production system behind example.com"}
 ```
 
 `server` is the fixed discriminator to key on; `describe` is the `init!`-time self-description, `null` when unset.
@@ -115,15 +121,15 @@ That makes the name worth choosing deliberately when more than one system is con
 *which* system an eval will run in. Name entries after the project and the environment —
 
 ```
-mpf-local-repl    → the JVM on your desk
-mpf-prod-repl     → the one that pages you
+shop-local-repl    → the JVM on your desk
+shop-prod-repl     → the one that pages you
 ```
 
 `:describe` complements the name from the inside: the server states its own environment, in its own voice, as part of
 the intro every connecting session reads —
 
 ```clojure
-(remontoire/init! {:describe "the production system behind multiply.co"})
+(remontoire/init! {:describe "the production system behind example.com"})
 ```
 
 Seriousness is inferred together with the environment. A model told it is inside the production system behaves
@@ -158,6 +164,6 @@ in-process it marks no session and simply prints the prose and returns the API o
 ## Design
 
 Every decision in this library was settled empirically against a live connection and recorded with its evidence in
-[doc/design/](doc/design/) — one file per section: binding and origin policy in §4, retention in §5, the eval model
-in §9, sessions and output attribution in §11. The dated record of the smoke tests and trials behind them is
-[doc/logbook/](doc/logbook/), one dated file per entry. When behavior surprises you, the design doc says why it is the way it is.
+[doc/design/](doc/design/): binding and origin policy in §4, retention in §5, the eval model in §9, sessions and output
+attribution in §11. When behavior surprises you, the design doc says why it is the way it is. Working on Remontoire
+itself is covered in [CONTRIBUTING.md](CONTRIBUTING.md).

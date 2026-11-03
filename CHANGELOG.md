@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.0 - 2026-11-03
+
+- Serve the stateless 2026-07-28 MCP revision beside the earlier ones, on the same endpoint. Clients that open with
+  `initialize` keep working exactly as before.
+- In the stateless revision the session is a tool: call `create-session` first and pass its id as `session-id` to
+  every other tool. An unknown or expired id is refused with an error that says to create a new session; every
+  response footer shows the id.
+- Clients that support MCP tasks get long evals as tasks. An eval still running after 10 s moves to the background, and
+  the client delivers its result when it settles; stopping the task cancels the eval. These clients are offered only
+  `create-session` and `eval`, since their own task handling replaces `await` and `cancel`. Task `bfw-12` is registry
+  entry 12, so `(__r/res 12)` still composes on the work while it runs.
+- `(__r/manual)` describes the async model that matches the session's client.
+- Update Quiescent to 0.11.6. An eval cancelled because a task it depended on failed now reports that failure, not a
+  bare cancellation.
+
 ## 0.7.4 - 2026-10-01
 
 - Scratch namespaces follow host reloads. A reloader that replaces namespace objects (clj-reload, tools.namespace)
