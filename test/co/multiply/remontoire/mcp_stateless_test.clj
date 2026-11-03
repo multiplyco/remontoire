@@ -70,6 +70,8 @@
     (is (not (contains? (get-in (first (filter #(= "eval" (:name %)) with)) [:inputSchema :properties])
                :await))
       "a tasks client's eval has no deadline to set")
+    (is (contains? (get-in (first (filter #(= "eval" (:name %)) with)) [:inputSchema :properties])
+          :background))
     (is (every? #(some #{"session-id"} (get-in % [:inputSchema :required]))
           (remove #(= "create-session" (:name %)) (concat with without))))))
 
@@ -120,6 +122,18 @@
     (is (not (str/includes? (tu/text-of (call! "eval" {:code "1" :session-id sid})) ";; settled"))
       "a followed eval's ending is the client's to announce, never news")
     (is (some? (:touched (registry/entry entry))) "delivery through the task releases the entry")))
+
+
+(deftest background-skips-the-grace
+  (with-redefs-fn {#'mcp/task-grace 60000}
+    #(let [sid     (create-session!)
+           t0      (System/nanoTime)
+           created (call! "eval" {:code "(Thread/sleep 60000)" :session-id sid :background true})
+           waited  (quot (- (System/nanoTime) t0) 1000000)
+           task-id (get-in created [:result :taskId])]
+       (is (= "task" (get-in created [:result :resultType])))
+       (is (< waited 5000) "answered without waiting out the grace")
+       (rpc! "tasks/cancel" {:taskId task-id}))))
 
 
 (deftest tasks-cancel-is-real

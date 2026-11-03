@@ -289,7 +289,7 @@
     call answers with a task follows that call's declaration — an undeclared request never receives one.
   - *The principle: when the client follows tasks, trust its task machinery over Remontoire's own tools.* Waiting
     and cancelling are the harness's business — await all, wake on any, stop — so a declaring client is listed
-    `create-session` and `eval` with `code` and `ns` only: no `await` parameter, no `await` or `cancel` tool. Listed
+    `create-session` and `eval` with `code`, `ns` and `background`: no `await` parameter, no `await` or `cancel` tool. Listed
     beside tasks, `await` would itself background and hand the model two handles to one piece of work. The
     unlisted handlers stay live for clients holding a stale list, and the registry stays inspectable — `(evals)`,
     `res`, `q/await`/`q/cancel` on an entry from eval — underneath, not instead.
@@ -303,6 +303,10 @@
     clients, and the interval only sets delivery latency. A task answer has no `content`; the entry id rides
     `statusMessage` (`;; id 12 · running in the background`) so the model can bridge to the registry if the client
     shows it.
+  - *`background` skips the grace* for work the caller knows is long — a polling loop it means to read and cancel
+    later. The grace exists to spare quick work a task, and a caller who knows better should not pay 10 s for it.
+    It is a boolean, not a deadline: the one choice the tasks path leaves the model is whether to wait at all, and
+    work that has settled by the time it is checked still answers inline.
   - *Non-declaring modern clients* keep today's `running` path under the handle; legacy support can be dropped
     once every client in use is confirmed to speak 2026-07-28.
 

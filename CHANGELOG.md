@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.2 - 2026-11-03
+
+- Clients that follow MCP tasks get a boolean `background` on `eval`: work known to be long, like a polling loop,
+  answers as a task at once instead of holding the call through the 10 s grace.
+
 ## 0.8.1 - 2026-11-03
 
 - The manual is clearer on four points that came up in use:

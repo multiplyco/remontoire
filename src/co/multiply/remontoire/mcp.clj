@@ -16,7 +16,7 @@
 
 
 (def ^:private server-info
-  {:name "Remontoire" :version "0.8.1"})
+  {:name "Remontoire" :version "0.8.2"})
 
 
 (def ^:private await-ms
@@ -306,7 +306,8 @@
    it is answered with a task instead (§11). Fixed by the server, not the
    caller: below it a result is as good as instantaneous, above it the
    client's task machinery waits better than a held call does — and it
-   stays far inside every client timer measured (§4). `manual.md` states
+   stays far inside every client timer measured (§4). A caller that knows
+   its work is long skips it with `background` (§11). `manual.md` states
    the 10 s figure literally — a change here must update it by hand."
   10000)
 
@@ -351,12 +352,13 @@
 
 (defn- eval-handler
   "Run, register, wait up to the bound, report. A client that follows MCP
-   tasks waits the fixed `task-grace` instead of its own deadline, and an
-   eval still running then is answered with a task: the client follows it
+   tasks waits the fixed `task-grace` instead of its own deadline — or not
+   at all, with `background` — and an eval still running then is answered
+   with a task: the client follows it
    with `tasks/get`, which delivers the response `report` renders. Once
    the task answer is out, the entry is told — the client announces its
    ending, so `;; settled` news never does (§11)."
-  [{:keys [code ns await]} {:keys [peer display session tasks? modern?] ::keys [request-id]}]
+  [{:keys [code ns await background]} {:keys [peer display session tasks? modern?] ::keys [request-id]}]
   (let [{:keys [task details baseline bank]} (evaluate/evaluate code ns session)
         {:keys [id evicted]}
         (registry/capture! {:task         task
@@ -370,7 +372,11 @@
     ;; Point the transport's progress display at the bank before waiting, so
     ;; heartbeats can show the eval's latest output line while it runs (§4).
     (when display (reset! display bank))
-    (cancellable-await task (if tasks? task-grace (deadline await await-ms)) request-id)
+    (cancellable-await task
+      (cond (and tasks? background) 0
+            tasks?                  task-grace
+            :else                   (deadline await await-ms))
+      request-id)
     (if (and tasks? (= :running (registry/status task)))
       (do
         ;; A task answer carries no text, so the admission's own losses
@@ -470,7 +476,8 @@
     "response carries its id — a handle to the work, usable before it "
     "settles. A call still unfinished after " (quot task-grace 1000) " s "
     "continues in the background as a task your client follows and "
-    "delivers when it settles. The task id names the registry entry — task "
+    "delivers when it settles; pass `background` to skip the wait when "
+    "the work is known to be long. The task id names the registry entry — task "
     "`bfw-12` is `(__r/res 12)` — so follow-up work can be chained onto it "
     "while it runs.\n\n"))
 
@@ -879,6 +886,13 @@
     tools))
 
 
+(def ^:private background-property
+  "The tasks path's one say over waiting (§11): skip the grace."
+  {:type        "boolean"
+   :description (str "Answer as a task at once instead of waiting up to " (quot task-grace 1000)
+                  " s — for work known to be long, like a polling loop. Default false.")})
+
+
 (defn- modern-declarations
   "The tool list for a stateless request: with the tasks extension declared,
    `create-session` and an `eval` without a deadline; otherwise all of it,
@@ -887,7 +901,8 @@
   (let [listed (if tasks?
                  [(-> (by-name "eval")
                     (assoc :description (eval-description eval-async-tasks))
-                    (update-in [:inputSchema :properties] dissoc :await))]
+                    (update-in [:inputSchema :properties] dissoc :await)
+                    (assoc-in [:inputSchema :properties :background] background-property))]
                  tools)]
     (into [(dissoc create-session-tool :handler)]
       (map (comp #(dissoc % :handler) with-session-id))
