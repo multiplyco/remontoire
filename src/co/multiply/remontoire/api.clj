@@ -9,6 +9,7 @@
     [clojure.string :as str]
     [co.multiply.quiescent :as q]
     [co.multiply.remontoire.exception :as exception]
+    [co.multiply.remontoire.history :as history]
     [co.multiply.remontoire.outline :as outline]
     [co.multiply.remontoire.registry :as registry]
     [co.multiply.remontoire.session :as session]
@@ -133,6 +134,64 @@
         (exception/profile (q/get-ex task)
           (some-> (:baseline (registry/entry id)) deref)))
       (str "Entry " id " is " (name (registry/status task))))))
+
+
+(defn nrepl-history
+  "All retained nREPL summaries, newest evaluation start first; not MCP entries.
+   Returns {:capture {...settings, :entries count} :entries [...]}.
+   Summaries omit :input and :output; use `nrepl-transcript` for those.
+
+   Capture must be installed and explicitly enabled by the host. The default
+   is five evaluations across the JVM, including running ones. Filter the
+   returned :entries in Clojure if needed. If 'my last command' is ambiguous,
+   ask which session rather than guessing. Reads do not refresh retention."
+  []
+  (history/recent))
+
+
+(defn nrepl-transcript
+  "Read one nREPL history id, NOT an MCP eval id. Returns identity, start time,
+   :input (code prefix) and :output (labeled text tail), or
+   {:id id :missing true} when no longer retained.
+
+   Text only — no live values or inferred execution status. Output contains
+   already-printed :value, :out, :err, :ex and :root-ex strings. Labels count
+   toward the output limit; the tail may start mid-line or mid-label. Text may
+   be truncated by capture limits or nREPL's own printer settings.
+   Protocol statuses and unattributed background output are not captured.
+   A snapshot is diagnostic context, not proof of completion or an audit log."
+  [id]
+  (history/transcript id))
+
+
+(defn nrepl-capture!
+  "With no args, report recording settings and retained entry count. With a
+   map, merge :enabled? (default false), :max-entries (5), :max-chars (10000).
+   Requires `co.multiply.remontoire.nrepl/wrap-history` in the nREPL stack.
+
+   :max-chars counts UTF-16 code units, independently for input and output,
+   not UTF-8 bytes or model tokens. Truncation may split a surrogate pair.
+   Keep the beginning of code and the end of labeled output. Configure at
+   startup or later: entry limits apply on the next evaluation start, input
+   limits on new inputs, and output limits on subsequent appends. Untouched
+   snapshots stay unchanged. Increasing limits cannot recover discarded text.
+
+   Disable with {:enabled? false} to stop recording and clear history. Enable
+   with {:enabled? true} to capture only new evaluations. Writers briefly
+   serialize bounded text updates, so capture may delay an nREPL response.
+
+   All trusted agents can read captured inputs/results, including secrets.
+   Enable only deliberately; there is no automatic redaction."
+  ([] (history/status))
+  ([opts] (history/configure! opts)))
+
+
+(defn clear-nrepl-history!
+  "Delete retained nREPL history without changing recording settings. Late
+   responses cannot restore it and ids aren't reused. Cannot retract copies
+   already read by an agent."
+  []
+  (history/clear!))
 
 
 (defn sessions

@@ -5,7 +5,12 @@
    `:dev` alias and never in the jar."
   (:require
     [co.multiply.remontoire :as remontoire]
+    [co.multiply.remontoire.api :as r]
     [nrepl.cmdline :as nrepl]))
+
+
+(comment
+  (r/nrepl-capture! {:enabled? true}))
 
 
 (defn -main

@@ -90,7 +90,7 @@
    no longer resolves."
   [^Class c loader]
   (try (Class/forName (Class/.getName c) false loader)
-       (catch ClassNotFoundException _ nil)))
+    (catch ClassNotFoundException _ nil)))
 
 
 (defn- stale-mappings

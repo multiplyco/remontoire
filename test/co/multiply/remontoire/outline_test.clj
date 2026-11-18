@@ -21,7 +21,7 @@
     (is (= all (vec (sort all))) "sorted")
     (is (some #{'clojure.core} all)))
   (is (= ['co.multiply.remontoire.fixture]
-        (outline/nses 'co.multiply.remontoire.fixture))
+         (outline/nses 'co.multiply.remontoire.fixture))
     "a symbol answers whether a namespace is loaded")
   (is (= [] (outline/nses 'no.such.loaded.ns)))
   (let [hits (outline/nses "REMONTOIRE")]
@@ -119,7 +119,7 @@
   (let [hits (outline/vars "co.multiply.remontoire.fixture/")]
     (is (= '[plain-value hidden *knob* public-fn private-fn public-macro poly
              *gadget* gadget-impl gadget-run gadget? ->gadget map->gadget gadget]
-          (mapv :name hits))
+           (mapv :name hits))
       "an empty name side lists the scope whole, in source order —
        a listing, not a ranking, so privates keep their place")
     (is (not-any? :matched hits) "no name match, no quoted evidence")))
@@ -135,13 +135,13 @@
   (is (thrown? IllegalArgumentException (outline/vars "/"))
     "both sides empty scopes nothing")
   (is (= '{:ns clojure.core, :name /}
-        (select-keys (first (outline/vars 'clojure.core//)) [:ns :name]))
+         (select-keys (first (outline/vars 'clojure.core//)) [:ns :name]))
     "the reader splits 'clojure.core// — the division var answers, exact tier first"))
 
 
 (deftest vars-qualified-regex
   (is (= '[public-fn public-macro]
-        (mapv :name (outline/vars #"fixture/public-")))
+         (mapv :name (outline/vars #"fixture/public-")))
     "a regex with a / matches whole qualified names")
   (is (not-any? #(= 'plain-value (:name %)) (outline/vars #"fixture"))
     "a slashless regex matches bare names — a namespace hit alone is no hit"))
@@ -162,8 +162,8 @@
   (is (some #{'co.multiply.remontoire.fixture} (outline/nses "co.*.fixture"))
     "the wildcard serves nses the same way")
   (is (= '[public-macro]
-        (mapv :name (:vars (outline/outline 'co.multiply.remontoire.fixture
-                             {:match "p*-macro"}))))
+         (mapv :name (:vars (outline/outline 'co.multiply.remontoire.fixture
+                              {:match "p*-macro"}))))
     "and outline's :match")
   (is (= [] (outline/vars "no*such*name"))
     "a starred miss is still a miss"))
@@ -171,14 +171,14 @@
 
 (deftest vars-ranks-sigils-and-publics
   (is (= '[gadget *gadget* gadget? ->gadget map->gadget gadget-run gadget-impl]
-        (mapv :name (outline/vars "fixture/gadget")))
+         (mapv :name (outline/vars "fixture/gadget")))
     "exactness as spelled leads; decorated exactness — earmuffs, ?, ->,
      map-> — follows in source order; name hits close, publics before
      privates whatever the source order says")
   (is (= 'gadget? (:name (first (outline/vars "fixture/gadget?"))))
     "a query spelling the sigil is exact as spelled")
   (is (= '[gadget *gadget* gadget? ->gadget map->gadget gadget-run gadget-impl]
-        (mapv :name (outline/vars "fixture/gad*et")))
+         (mapv :name (outline/vars "fixture/gad*et")))
     "glob exactness reads through the decoration the same way"))
 
 
@@ -189,7 +189,7 @@
     (is (string? (:doc o)))
     (is (= '[plain-value hidden *knob* public-fn private-fn public-macro poly
              *gadget* gadget-impl gadget-run gadget? ->gadget map->gadget gadget]
-          (mapv :name (:vars o)))
+           (mapv :name (:vars o)))
       "source order, privates included")
     (is (true? (:private (by-name 'hidden))))
     (is (true? (:macro (by-name 'public-macro))))
@@ -218,15 +218,15 @@
     (is (not-any? :private (:vars pub)) "the public surface alone on request")
     (is (= '[plain-value *knob* public-fn public-macro poly
              *gadget* gadget-run gadget? ->gadget map->gadget gadget]
-          (mapv :name (:vars pub)))
+           (mapv :name (:vars pub)))
       "everything else survives the filter, order untouched")))
 
 
 (deftest designators-compose
   (is (= 'co.multiply.remontoire.fixture
-        (:ns (outline/outline "co.multiply.remontoire.fixture"))))
+         (:ns (outline/outline "co.multiply.remontoire.fixture"))))
   (is (= 'co.multiply.remontoire.fixture
-        (:ns (outline/outline (the-ns 'co.multiply.remontoire.fixture)))))
+         (:ns (outline/outline (the-ns 'co.multiply.remontoire.fixture)))))
   (binding [*ns* (the-ns 'co.multiply.remontoire.outline-test)]
     (is (= 'co.multiply.remontoire.fixture (:ns (outline/outline 'fix)))
       "an alias visible from the calling namespace designates"))

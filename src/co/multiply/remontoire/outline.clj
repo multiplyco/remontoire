@@ -294,12 +294,13 @@
                                   hit)]
                    (map #(into {:ns (ns-name ns)} %)
                      (keep #(entry % false name-hit doc-hit) (vals (ns-interns ns)))))))
-       (sort-by (fn [e] [(tier e)
-                         (:ns e)
-                         ;; Publics first only under a name side: a bare
-                         ;; scope listing is a listing, not a ranking.
-                         (if (and hit (:private e)) 1 0)
-                         (or (:line e) Long/MAX_VALUE)]))
+       (sort-by (fn [e]
+                  [(tier e)
+                   (:ns e)
+                   ;; Publics first only under a name side: a bare
+                   ;; scope listing is a listing, not a ranking.
+                   (if (and hit (:private e)) 1 0)
+                   (or (:line e) Long/MAX_VALUE)]))
        (into [])))))
 
 

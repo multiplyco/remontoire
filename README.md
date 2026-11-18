@@ -170,6 +170,51 @@ $ curl http://127.0.0.1:7888/probe
 `server` is the fixed discriminator to key on; `describe` is the `init!`-time self-description, `null` when unset.
 Exposure and origin policy are exactly `/mcp`'s.
 
+## Let the agent read your nREPL history
+
+Optional nREPL middleware lets your agent read recent editor evaluations—the code you ran, its printed results,
+output, and errors—without copying them into chat. It records a transcript; it does not change how nREPL evaluates
+code. This supports JVM Clojure, not ClojureScript.
+
+With Remontoire and nREPL already on your application's classpath:
+
+1. Add `co.multiply.remontoire.nrepl/wrap-history` to your nREPL middleware configuration, keeping any existing
+   middleware. For a server launched with `nrepl.cmdline`, configure it in the project's `.nrepl.edn`:
+
+   ```clojure
+   {:middleware [co.multiply.remontoire.nrepl/wrap-history]}
+   ```
+
+   Restart nREPL to load the middleware. If your editor starts the server, use its middleware configuration;
+   not every launcher reads `.nrepl.edn`.
+2. In your editor's REPL, enable recording explicitly:
+
+   ```clojure
+   (require '[co.multiply.remontoire.api :as r])
+
+   (r/nrepl-capture! {:enabled? true})
+   ```
+
+   **Captured inputs and outputs may contain secrets. Every trusted agent connected to this Remontoire instance
+   can read them; there is no automatic redaction.**
+
+The [MCP endpoint](#starting-the-endpoint) must be running in the **same JVM** as nREPL. Installing the middleware
+does not start MCP or enable recording, and commands run before recording began cannot be recovered.
+
+Now ask your agent what you last ran or why it failed. It can use `(__r/nrepl-history)` to list recent evaluations
+and `(__r/nrepl-transcript id)` to read one. History is kept in memory only. By default it keeps the **five most
+recently started evaluations across the JVM**, including running ones, with independent limits of **10000 UTF-16
+codepoints** for code and output.
+
+Configure both limits at startup or later; changes apply on subsequent recordings:
+
+```clojure
+(r/nrepl-capture! {:max-entries 5 :max-chars 10000})
+```
+
+Stop recording and clear history with `(r/nrepl-capture! {:enabled? false})`, or clear history without stopping
+recording with `(r/clear-nrepl-history!)`. Clearing cannot retract copies an agent has already read.
+
 ## Connecting Claude Code
 
 Point an HTTP MCP entry at the endpoint:

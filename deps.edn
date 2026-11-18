@@ -36,7 +36,8 @@
           :jvm-opts    ["-Djdk.attach.allowAttachSelf"]}
 
   :test  {:extra-paths ["test" "test-resources"]
-          :extra-deps  {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+          :extra-deps  {lambdaisland/kaocha {:mvn/version "1.91.1392"}
+                        nrepl/nrepl         {:mvn/version "1.7.0"}}
           :main-opts   ["-m" "kaocha.runner"]}
 
   :build {:ns-default build

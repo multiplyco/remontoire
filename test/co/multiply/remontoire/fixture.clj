@@ -44,6 +44,7 @@
 (defmethod poly :a [_] :a)
 (defmethod poly :b [_] :b)
 
+
 ;; The sigil family: one stem under each conventional decoration, the
 ;; undecorated stem deliberately last — only ranking, never source
 ;; order, can put it first. The impl/run pair reverses source order
