@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 - 2026-11-20
 
 - An agent can send a file to the JVM without the file passing through its context. The endpoint answers
   `PUT /upload/<session-id>/<name>` beside `/mcp`, with the same exposure and origin policy: the body is staged in a
