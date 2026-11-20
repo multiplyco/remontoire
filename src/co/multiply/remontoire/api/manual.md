@@ -101,6 +101,17 @@ plain data — `vars` scored, best hits first — so a large result is a collect
 cleanup, deadlines, partial results, integrations, work that outlives its eval, bounded fan-out, repeating work — are
 loaded pattern namespaces: `(__r/nses "patterns")` is the index, `outline` and `file` read them.
 
+## Loading edited code
+
+If the project names a way to reload, follow those instructions; otherwise use standard Clojure:
+`(require 'some.ns :reload)` for a namespace on the classpath, `(load-file "path/to/file.clj")` for a file off it. The
+path is the JVM's, relative to its working directory. Either way the JVM reads the file itself and none of its source
+passes through you.
+
+Both read the JVM's disk, so they see your edits only when the JVM runs on the checkout you are editing. On a remote
+host the file has to reach the disk of the host first, and `load-file` by path is then the reliable route: on a host
+running from a jar, `:reload` re-reads the jar's copy, not yours.
+
 ## Sharing the JVM
 
 One JVM, one system: the registry is shared across every connected session — `(__r/evals)` lists everything, `:by`
