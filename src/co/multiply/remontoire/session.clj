@@ -19,9 +19,15 @@
 
    The scratch namespaces themselves — naming, furnishing, reaping — also
    live here: a session's scratch family is conversational state exactly
-   like its sticky namespace, created on demand and gone with the session."
+   like its sticky namespace, created on demand and gone with the session.
+   So is its upload directory, where files a client hands the JVM are
+   staged: minted on the first upload, deleted with the session."
   (:require [co.multiply.remontoire.rewire :as rewire])
-  (:import [java.util UUID]))
+  (:import
+    [java.nio.file FileVisitOption Files LinkOption Path]
+    [java.nio.file.attribute FileAttribute]
+    [java.util UUID]
+    [java.util.stream Stream]))
 
 
 (def expiry-ms
@@ -45,7 +51,8 @@
 
 
 ;; sid → {:last-seen ms, :client m, :current-ns sym, :fetched-tools decls,
-;;        :evictions [ids], :manual-read bool, :nudged bool}. Keys are
+;;        :evictions [ids], :manual-read bool, :nudged bool,
+;;        :upload-dir Path, :address str}. Keys are
 ;; transport-minted ids, never nil: a
 ;; request without one is refused at the door (http, 2026-08-06).
 (defonce ^:private state (atom {}))
@@ -110,6 +117,19 @@
   nil)
 
 
+(defn- sid-tag
+  "`sid` as text safe to build names from — the same 8-char id prefix `:by`
+   attribution wears, filtered to letters and digits, since an adopted sid
+   is client-chosen text (hashed whole when nothing survives the filter)."
+  [sid]
+  (let [tag (into [] (comp (filter #(Character/isLetterOrDigit (char %)))
+                       (take 8))
+              sid)]
+    (if (seq tag)
+      (apply str tag)
+      (Integer/toHexString (hash sid)))))
+
+
 (defn scratch-ns-sym
   "The scratch namespace `sid`'s evals start in. Per session, so two
    tenants' defs and requires cannot collide — named by the same 8-char id
@@ -121,13 +141,7 @@
   [sid]
   (if (nil? sid)
     'co.multiply.remontoire.scratch
-    (let [tag (into [] (comp (filter #(Character/isLetterOrDigit (char %)))
-                         (take 8))
-                sid)]
-      (symbol (str "co.multiply.remontoire.scratch.s"
-                (if (seq tag)
-                  (apply str tag)
-                  (Integer/toHexString (hash sid))))))))
+    (symbol (str "co.multiply.remontoire.scratch.s" (sid-tag sid)))))
 
 
 (defn scratch-sub-ns-sym
@@ -210,16 +224,80 @@
       (sort-by str (all-ns)))))
 
 
+(defn- delete-tree!
+  "Delete `dir` and everything beneath it, best effort. Links are removed,
+   never followed: what a tenant linked to from its upload directory is not
+   the session's to delete."
+  [^Path dir]
+  (when (Files/exists dir (make-array LinkOption 0))
+    (with-open [paths (Files/walk dir (make-array FileVisitOption 0))]
+      (doseq [^Path p (reverse (iterator-seq (Stream/.iterator paths)))]
+        (try (Files/deleteIfExists p) (catch Exception _ nil))))))
+
+
+;; One directory per JVM under the platform temp directory, the sessions'
+;; own beneath it. Per JVM rather than a fixed name, so two JVMs on one
+;; machine never share — or sweep — each other's uploads; removed at exit,
+;; and a crashed JVM's is left to the platform's own temp cleaning.
+(defonce ^:private upload-root
+  (delay
+    (let [root (Files/createTempDirectory "remontoire-" (make-array FileAttribute 0))]
+      (Runtime/.addShutdownHook (Runtime/getRuntime)
+        (Thread. ^Runnable (fn [] (delete-tree! root))))
+      root)))
+
+
+(defn upload-dir
+  "Where `sid`'s uploaded files are staged, or nil when it has none yet.
+
+   Output shape:
+   Path"
+  ^Path [sid]
+  (get-in @state [sid :upload-dir]))
+
+
+(defn upload-dir!
+  "`sid`'s upload directory, minted on first use: a fresh directory named
+   by the sid tag and a random suffix, so the path is never something a
+   client constructs — it is asked for. nil for a sid that is not live: an
+   upload must never mint the session it names."
+  ^Path [sid]
+  (locking upload-root
+    (or (upload-dir sid)
+      (when (live? sid)
+        (let [dir (Files/createTempDirectory @upload-root (str (sid-tag sid) "-")
+                    (make-array FileAttribute 0))]
+          (swap! state
+            (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :upload-dir] dir))))
+          ;; A drop racing the mint leaves the directory unrecorded — take
+          ;; it back rather than leak it.
+          (or (upload-dir sid)
+            (do (delete-tree! dir) nil)))))))
+
+
+(defn upload-dirs
+  "Every live session's upload directory, for those that have one.
+
+   Output shape:
+   {sid Path}"
+  []
+  (into {}
+    (keep (fn [[sid {:keys [upload-dir]}]] (when upload-dir [sid upload-dir])))
+    @state))
+
+
 (defn drop!
   "Forget `sid`. The registry releases a session's entry claims before
    dropping it — see `registry/release-session!`, which owns that order.
-   The session's scratch family goes with it — compartments included:
+   Its upload directory is deleted, staged files and all. The session's
+   scratch family goes with it — compartments included:
    conversational state dies with the session — so an eval somehow still
    running there fails loudly at its next form (`No namespace`) rather
    than working on in a ghost. The sessionless in-process caller's shared
    scratch family is never removed — no session to die with."
   [sid]
-  (swap! state dissoc sid)
+  (let [[before] (swap-vals! state dissoc sid)]
+    (some-> (get-in before [sid :upload-dir]) delete-tree!))
   (when (some? sid)
     (run! remove-ns (scratch-nses sid)))
   nil)
@@ -280,6 +358,22 @@
   (mapv (fn [[sid m]]
           (assoc (select-keys m [:last-seen :client :note]) :sid sid))
     @state))
+
+
+(defn address!
+  "How `sid`'s client addressed its latest request — scheme and authority,
+   `http://host:port` — kept as the best available guess at where the same
+   client can reach this server's other doors. Guarded like `note!`: a
+   request must not mint a session by being addressed somewhere."
+  [sid address]
+  (swap! state
+    (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :address] address))))
+  nil)
+
+
+(defn address
+  [sid]
+  (get-in @state [sid :address]))
 
 
 (defn manual-read!

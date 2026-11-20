@@ -339,6 +339,45 @@ internet, via a load balancer; everything else is reachable from inside the over
   `tailscaled` local API can resolve device and user if that ever proves insufficient. Retrofitting this once ids mean
   something is unpleasant.
 
+## Files: the upload door
+
+An in-process server reads the host's disk, never the client's. When the JVM runs on the checkout being edited that is
+no limit — `require :reload` and `load-file` read the edit where it was made — but against a remote host the edited
+file has to cross, and the only crossing MCP itself offers is a tool argument, which the model writes out token by
+token. Built 2026-11-20; the trial is in the logbook.
+
+- **The bytes travel beside the protocol, not inside it.** `PUT /upload/<session-id>/<name>` on the same listener, the
+  same origin policy, fed by the agent's shell. What reaches the model's context is the command and a one-line answer.
+  It needs a harness whose agent has a shell that can reach the endpoint; a shell-less client is out of its reach.
+- **Staging, not placing.** The server puts the file in a directory of the session's own and says where. Whether it is
+  then loaded where it lies, moved over the file its namespace was loaded from, or only read is decided in an eval, by
+  whoever knows what the JVM runs from: a checkout has a right place for a source file, a jar has none. The mechanical
+  version of the checkout case is a recipe (`patterns.uploads/place!`), not API — the same line that keeps reload
+  helpers out of the toolkit.
+- **The directory is the record.** `(__r/uploads)` lists what is on disk; nothing is registered, so a file moved out
+  or deleted is gone from the listing with nothing to keep in step. Shared across sessions with `:by`, as the registry
+  is: attribution, not isolation.
+- **Conversational state.** The directory is minted on the first upload, named by the session tag and a random suffix
+  so that no client ever constructs the path, and deleted with the session. One root per JVM under the platform temp
+  directory, removed at exit — per JVM rather than a fixed name, so two JVMs on one machine never sweep each other's
+  files; a crashed JVM's root is left to the platform. An upload refreshes the session it names and never mints one.
+- **Names are client-chosen text.** `/` nests, so two files of one basename can be staged together; a segment that is
+  empty, `.` or `..` is refused, and the resolved path must stay beneath the directory. A file is written beside the
+  directory and moved in whole, so a listing or a load never sees half of one, and a name sent again replaces the file
+  — re-sending an edit is the expected use. 64 MiB per file, checked against the declared length before a byte is read
+  and against the bytes as they arrive.
+- **The address is a guess, and says so.** The server cannot know how it is reached from outside, so
+  `(__r/upload-url)` answers with the host the session's latest request named — a proxy's `X-Forwarded-Host` and
+  `X-Forwarded-Proto` believed when present — and prints that it is a guess. Right on a direct connection or a
+  forwarded port; a proxy that rewrites the host, or mounts the endpoint under a path prefix, makes it wrong.
+- **No new trust boundary.** `eval` on the same port already writes any file it likes. The route is always on, with no
+  option to disable it, for that reason.
+
+The protocol's own answer is in draft: an experimental MCP extension lets a tool mark an argument as a file, which the
+client fills from disk without the bytes entering model context, inline for small files. That is the right shape, and
+its inline mode would feed this same staging directory from a tool call. Deferred until a client implements it: the
+draft leaves how a model names a local file to the host, and as read on 2026-11-20 it had no reference implementation.
+
 ## Source-bearing and runtime-only halves
 
 Running against a deployed server splits the library along an axis nothing else in this document does. §5, §6, §9 and

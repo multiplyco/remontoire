@@ -7,7 +7,9 @@
    response message (§4). Nothing here initiates messages, so there is no GET
    stream to offer and GET is 405 — news reaches the model by riding
    responses instead (§5). Beside it, `/probe` is a sessionless GET answering
-   the server's identity for discovery and health checks (§11)."
+   the server's identity for discovery and health checks (§11), and
+   `/upload/<session-id>/<name>` takes a file by PUT into that session's
+   upload directory."
   (:require
     [clojure.data.json :as json]
     [clojure.string :as str]
@@ -15,11 +17,13 @@
     [co.multiply.remontoire.mcp :as mcp]
     [co.multiply.remontoire.registry :as registry]
     [co.multiply.remontoire.session :as session]
-    [co.multiply.remontoire.tee :as tee])
+    [co.multiply.remontoire.tee :as tee]
+    [co.multiply.remontoire.upload :as upload])
   (:import
+    [clojure.lang ExceptionInfo]
     [com.sun.net.httpserver Headers HttpExchange HttpHandler HttpServer]
     [java.io IOException OutputStream]
-    [java.net InetSocketAddress]
+    [java.net InetSocketAddress URI]
     [java.nio.charset StandardCharsets]
     [java.util Base64 Base64$Decoder]))
 
@@ -80,6 +84,18 @@
         (Headers/.set (HttpExchange/.getResponseHeaders exchange) "Mcp-Session-Id" sid)
         sid)
       (some-> (header exchange "Mcp-Session-Id") session/seen!))))
+
+
+(defn- note-address!
+  "Record how the client addressed this request, for `sid`: the `Host` it
+   named, or what a proxy in front says the client named. A guess at the
+   server's outside address, which the server cannot know — good on a
+   direct connection, plausible behind a proxy that forwards the original
+   host, and wrong behind one that does neither."
+  [exchange sid]
+  (let [forwarded #(some-> (header exchange %) (str/split #",") first str/trim not-empty)]
+    (when-let [host (or (forwarded "X-Forwarded-Host") (header exchange "Host"))]
+      (session/address! sid (str (or (forwarded "X-Forwarded-Proto") "http") "://" host)))))
 
 
 (defn- origin-allowed?
@@ -308,6 +324,7 @@
                :error   {:code code :message message}}))
     (let [ctx {:peer peer}
           sid (get-in payload [:params :arguments :session-id])]
+      (when sid (note-address! exchange sid))
       (if (and (accepts-sse? exchange) (= "tools/call" (:method payload)))
         (let [display (atom nil)]
           (some-> (respond-sse! exchange (progress-token payload) sid false display
@@ -325,6 +342,7 @@
   [exchange payload peer]
   (let [sid (session! exchange payload)
         ctx {:peer peer :session sid}]
+    (when sid (note-address! exchange sid))
     (cond
       (nil? sid)
       (respond! exchange 400 "text/plain"
@@ -424,6 +442,51 @@
       (HttpExchange/.close exchange))))
 
 
+(defn- handle-upload!
+  "The file door: `PUT /upload/<session-id>/<name>` stages the request body
+   as `name` in that session's upload directory and answers where it landed
+   — the JVM's own absolute path, ready for `load-file`. Bytes arrive here
+   rather than as a tool argument so that a file a client can send from its
+   shell never has to pass through the model. Same origin policy as `/mcp`,
+   and no wider a door: `eval` beside it already writes any file it likes.
+   An upload is liveness, like a heartbeat, but never mints the session it
+   names."
+  [exchange allowed-origins]
+  (try
+    (cond
+      (not (origin-allowed? exchange allowed-origins))
+      (respond! exchange 403 "text/plain" "Forbidden origin")
+
+      (not= "PUT" (HttpExchange/.getRequestMethod exchange))
+      (respond! exchange 405 "text/plain" "Method not allowed")
+
+      :else
+      (let [[_ sid name] (re-matches #"/upload/([^/]+)/(.+)"
+                           (URI/.getPath (HttpExchange/.getRequestURI exchange)))
+            declared     (some-> (header exchange "Content-Length") parse-long)]
+        (cond
+          (nil? sid)
+          (respond! exchange 400 "text/plain" "PUT /upload/<session-id>/<name>\n")
+
+          ;; Refused before a byte is read when the client says how much is
+          ;; coming; `store!` enforces the same bound on what actually arrives.
+          (and declared (< upload/max-bytes declared))
+          (respond! exchange 413 "text/plain"
+            (str "Larger than the " upload/max-bytes " byte limit\n"))
+
+          :else
+          (let [stored (upload/store! sid name (HttpExchange/.getRequestBody exchange))]
+            (session/refresh! sid)
+            (respond! exchange 201 json-content-type (str (encode stored) "\n"))))))
+    (catch ExceptionInfo e
+      (respond! exchange (:status (ex-data e) 500) "text/plain" (str (ex-message e) "\n")))
+    (catch IOException e
+      (respond! exchange 409 "text/plain"
+        (str (Class/.getSimpleName (class e)) ": " (ex-message e) "\n")))
+    (finally
+      (HttpExchange/.close exchange))))
+
+
 (defn- handler
   "A shell that delegates through a handler var: the reified instance is
    compiled once at `start!`, and logic inlined in its body is frozen until
@@ -444,6 +507,8 @@
                                         {:allowed-origins (set allowed-origins)}))
     (HttpServer/.createContext "/probe" (handler #'handle-probe!
                                           {:allowed-origins (set allowed-origins)}))
+    (HttpServer/.createContext "/upload" (handler #'handle-upload!
+                                           {:allowed-origins (set allowed-origins)}))
     ;; The default executor runs every exchange serially on the dispatch
     ;; thread, which deadlocks on the second connection. Quiescent's own
     ;; executor rather than a fresh virtual one: handler threads then carry

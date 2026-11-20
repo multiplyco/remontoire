@@ -4,14 +4,17 @@
    session discipline, async work spanning requests, and the SSE shape."
   (:require
     [clojure.data.json :as json]
+    [clojure.java.io :as io]
     [clojure.string :as str]
     [clojure.test :refer [deftest is use-fixtures]]
     [co.multiply.quiescent :as q]
     [co.multiply.remontoire :as remontoire]
     [co.multiply.remontoire.session :as session]
-    [co.multiply.remontoire.test-util :as tu])
+    [co.multiply.remontoire.test-util :as tu]
+    [co.multiply.remontoire.upload :as upload])
   (:import
     [com.sun.net.httpserver HttpServer]
+    [java.io File]
     [java.net InetSocketAddress URI]
     [java.net.http HttpClient HttpHeaders HttpRequest HttpRequest$Builder
      HttpRequest$BodyPublishers HttpResponse HttpResponse$BodyHandlers]
@@ -252,6 +255,89 @@
   (let [sid (initialize!)]
     (is (= 204 (HttpResponse/.statusCode (send! nil {:method :delete :sid sid}))))
     (is (not-any? #(= sid (:sid %)) (session/roster)))))
+
+
+(defn- upload!
+  "PUT `content` to the sibling `/upload` context as `name` for `sid`."
+  (^HttpResponse [sid name content] (upload! sid name content nil))
+  (^HttpResponse [sid name ^String content {:keys [origin method]}]
+   (let [builder (HttpRequest/newBuilder
+                   (URI/create (str (str/replace *url* "/mcp" "/upload/") sid "/" name)))]
+     (if (= :get method)
+       (HttpRequest$Builder/.GET builder)
+       (HttpRequest$Builder/.PUT builder (HttpRequest$BodyPublishers/ofString content)))
+     (when origin (HttpRequest$Builder/.header builder "Origin" origin))
+     (HttpClient/.send client (HttpRequest$Builder/.build builder)
+       (HttpResponse$BodyHandlers/ofString)))))
+
+
+(deftest an-upload-is-staged-for-its-session
+  (let [sid    (initialize!)
+        resp   (upload! sid "notes/a.edn" "{:n 1}")
+        staged (parsed resp)]
+    (is (= 201 (HttpResponse/.statusCode resp)))
+    (is (= "notes/a.edn" (:name staged)))
+    (is (= "{:n 1}" (slurp (:path staged)))
+      "the answer is the JVM's own path to the bytes")
+    ;; The listing is every session's; `:by` marks the ones not the caller's.
+    (is (str/starts-with? (text-of (call! sid "eval" {:code "(mapv :name (remove :by (__r/uploads)))"}))
+          "[\"notes/a.edn\"]")
+      "the session that sent it finds it listed as its own")
+    (is (= (:path staged) (:path (parsed (upload! sid "notes/a.edn" "{:n 2}"))))
+      "a name sent again lands in the same place")
+    (is (= "{:n 2}" (slurp (:path staged))) "and replaces what was there")))
+
+
+(defn- told-url
+  "The upload URL an eval answers with, read off the response text."
+  [response]
+  (second (re-find #"\"(https?://[^\"]+)\"" (text-of response))))
+
+
+(deftest a-session-is-told-where-to-upload
+  (let [sid (initialize!)
+        url (told-url (call! sid "eval" {:code "(__r/upload-url)"}))]
+    (is (str/starts-with? (str url) (str/replace *url* "/mcp" "/upload/"))
+      "the address the client itself used")
+    (is (= 201 (HttpResponse/.statusCode
+                 (HttpClient/.send client
+                   (-> (HttpRequest/newBuilder (URI/create (str url "a.edn")))
+                     (HttpRequest$Builder/.PUT (HttpRequest$BodyPublishers/ofString "{}"))
+                     (HttpRequest$Builder/.build))
+                   (HttpResponse$BodyHandlers/ofString))))
+      "and an upload sent there lands")
+    (is (str/starts-with?
+          (str (told-url
+                 (parsed (send! {:jsonrpc "2.0" :id 1 :method "tools/call"
+                                 :params  {:name "eval" :arguments {:code "(__r/upload-url)"}}}
+                           {:sid     sid
+                            :headers {"X-Forwarded-Proto" "https"
+                                      "X-Forwarded-Host"  "repl.example"}}))))
+          "https://repl.example/upload/")
+      "a proxy's account of the original address is believed")))
+
+
+(deftest an-upload-that-cannot-be-placed-is-refused
+  (let [sid (initialize!)]
+    (is (= 404 (HttpResponse/.statusCode (upload! "nobody" "a.edn" "{}"))))
+    (is (not (session/live? "nobody")) "an upload never mints the session it names")
+    (is (= 400 (HttpResponse/.statusCode (upload! sid "%2e%2e/escape.edn" "{}")))
+      "a name may not climb out of the directory")
+    (is (= 405 (HttpResponse/.statusCode (upload! sid "a.edn" nil {:method :get}))))
+    (is (= 403 (HttpResponse/.statusCode
+                 (upload! sid "a.edn" "{}" {:origin "https://evil.example"}))))
+    (with-redefs [upload/max-bytes 4]
+      (is (= 413 (HttpResponse/.statusCode (upload! sid "big.edn" "{:too :long}")))))
+    (is (= [] (upload/staged (session/upload-dir sid)))
+      "nothing refused is left behind")))
+
+
+(deftest uploads-die-with-the-session
+  (let [sid  (initialize!)
+        path (:path (parsed (upload! sid "a.edn" "{}")))]
+    (is (File/.exists (io/file path)))
+    (is (= 204 (HttpResponse/.statusCode (send! nil {:method :delete :sid sid}))))
+    (is (not (File/.exists (io/file path))))))
 
 
 ;; # The stateless era

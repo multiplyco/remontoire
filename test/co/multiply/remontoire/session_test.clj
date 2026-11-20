@@ -3,7 +3,9 @@
     [clojure.string :as str]
     [clojure.test :refer [deftest is use-fixtures]]
     [co.multiply.remontoire.session :as session]
-    [co.multiply.remontoire.test-util :as tu]))
+    [co.multiply.remontoire.test-util :as tu])
+  (:import
+    [java.nio.file Files LinkOption]))
 
 
 (use-fixtures :each (fn [f] (tu/reset-state!) (f)))
@@ -57,6 +59,20 @@
     (is (nil? (find-ns home)))
     (is (nil? (find-ns sub)) "compartments die with the session")
     (is (= [] (session/scratch-nses sid)))))
+
+
+(deftest the-upload-directory-is-minted-on-demand-and-dies-with-the-session
+  (let [sid (session/mint!)]
+    (is (nil? (session/upload-dir sid)) "nothing exists until something is uploaded")
+    (let [dir (session/upload-dir! sid)]
+      (is (Files/isDirectory dir (make-array LinkOption 0)))
+      (is (= dir (session/upload-dir! sid)) "one directory per session")
+      (is (= {sid dir} (session/upload-dirs)))
+      (spit (str dir "/a.edn") "{}")
+      (session/drop! sid)
+      (is (not (Files/exists dir (make-array LinkOption 0))) "staged files go with it"))
+    (is (nil? (session/upload-dir! "ghost")))
+    (is (not (session/live? "ghost")) "asking never mints a session")))
 
 
 (deftest unknown-ids-are-adopted-not-refused

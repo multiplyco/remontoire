@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- An agent can send a file to the JVM without the file passing through its context. The endpoint answers
+  `PUT /upload/<session-id>/<name>` beside `/mcp`, with the same exposure and origin policy: the body is staged in a
+  directory of the session's own under the JVM's temp directory, and the response names the path. Staged files are
+  deleted when their session ends; each is limited to 64 MiB. The route is always on.
+- `(__r/upload-url)` tells the agent where to send files, as a best guess from the address its client's latest request
+  named. `(__r/uploads)` lists what is staged, across sessions, with `:by` on other sessions' files.
+- A new recipe namespace, `co.multiply.remontoire.patterns.uploads`: `place!` moves a staged source file to where its
+  namespace lives on a directory classpath and returns the namespace to reload. Its walkthrough also shows sending many
+  edited files as one zip and unpacking it over the host's checkout.
+- The manual says how to load code edited on disk: the project's own reload where it names one, otherwise
+  `(require 'some.ns :reload)` or `load-file`, and what changes when the JVM runs on another host.
+
 ## 0.8.2 - 2026-11-03
 
 - Clients that follow MCP tasks get a boolean `background` on `eval`: work known to be long, like a polling loop,

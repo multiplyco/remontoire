@@ -112,6 +112,11 @@ Both read the JVM's disk, so they see your edits only when the JVM runs on the c
 host the file has to reach the disk of the host first, and `load-file` by path is then the reliable route: on a host
 running from a jar, `:reload` re-reads the jar's copy, not yours.
 
+`(__r/upload-url)` is one way to get it there: an address to send the file to from your shell, as in
+`curl -T file.clj <url>`. The response names the path the file landed at, `(__r/uploads)` lists what is staged, and a
+staged file is an ordinary file — load it where it is, or move it to where it belongs. The `uploads` pattern namespace
+has the recipe for each.
+
 ## Sharing the JVM
 
 One JVM, one system: the registry is shared across every connected session — `(__r/evals)` lists everything, `:by`

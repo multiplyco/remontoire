@@ -54,6 +54,19 @@ value.
 Failures remain inspectable too. The response shows the root cause and exception chain with evaluation machinery
 trimmed from the trace; the original throwable remains available for inspecting `ex-data`, causes, or the full stack.
 
+### Load edited code without pasting it
+
+When the JVM runs on the checkout the agent is editing, an edited file is loaded by name — the project's own reload,
+`(require 'some.ns :reload)` or `(load-file "path")` — and the JVM reads it from disk. None of the source passes
+through the agent's context.
+
+When the JVM runs somewhere else, the edited file is not on its disk. The agent can send it from its shell to the
+endpoint's upload route, which stages it in a temporary directory on the JVM's host and answers with the path. From
+there the file is an ordinary file: loaded where it lies, or moved to where its namespace lives and reloaded. A larger
+edit can travel as one zip of the changed files, unpacked over the host's checkout and followed by a single reload.
+The same route carries fixtures, data files and anything else the agent wants at the JVM's hand. This needs an agent with a
+shell that can reach the endpoint; see [Uploading files](#uploading-files).
+
 ### Guide the agent toward hygiene
 
 The manual and response cues teach the agent to work considerately in a shared, long-lived JVM: keep temporary
@@ -86,7 +99,7 @@ once. This teaches the workflow, including scratch namespaces and background wor
 setup or a separately maintained copy of the API reference.
 
 The server also includes discoverable Clojure recipe namespaces for common patterns: cleanup, deadlines, bounded
-parallelism, partial results, and repeating work. The agent can read them using the same navigation tools.
+parallelism, partial results, repeating work, and putting uploaded files in place. The agent can read them using the same navigation tools.
 
 MCP carries eval forms as data, avoiding an extra layer of shell quoting. Clients that support MCP tasks use their
 existing controls to follow and cancel background work. Most of the toolkit remains ordinary Clojure functions
@@ -112,7 +125,7 @@ waits and stops. Clients that open with `initialize` get the earlier revisions' 
 
 Inside evals, the toolkit is the `__r` namespace, aliased everywhere the agent goes: `nses`, `vars`, `outline`, `doc`,
 `source` and `file` for navigation; `res`, `evals`, `out` and `failure` for the registry; `sessions`, `introduce!`
-and `release!` for sharing the JVM with other connected sessions. Running entries remain addressable. Settled results
+and `release!` for sharing the JVM with other connected sessions; `upload-url` and `uploads` for files sent to the JVM. Running entries remain addressable. Settled results
 are protected until delivered or released, including release when their session ends; they then enter a bounded
 least-recently-used pool. Eviction is always announced, never silent.
 
@@ -170,6 +183,29 @@ $ curl http://127.0.0.1:7888/probe
 `server` is the fixed discriminator to key on; `describe` is the `init!`-time self-description, `null` when unset.
 Exposure and origin policy are exactly `/mcp`'s.
 
+### Uploading files
+
+The server also answers `PUT /upload/<session-id>/<name>`: the request body is staged as `name` in that session's
+upload directory, and the response names where it landed.
+
+```
+$ curl -T src/app/orders.clj http://127.0.0.1:7888/upload/pbg/
+{"name":"orders.clj","path":"/tmp/remontoire-4411/pbg-9305/orders.clj","size":2114}
+```
+
+This is for the agent rather than for you: `(__r/upload-url)` tells it the address, and `(__r/uploads)` lists what is
+staged. The address is a best guess — the host the client's latest request named, or what a proxy says it named in
+`X-Forwarded-Host` and `X-Forwarded-Proto` — and the agent is told to check its MCP configuration or ask you when it
+does not answer.
+
+- A name may contain `/` to nest, and may not climb out of the directory. With a trailing slash and no name, `curl -T`
+  sends the file under its own name. Sending a name again replaces the file.
+- Staging is all the server does. Loading a file, or moving it into a source tree, is the agent's to do in an eval.
+- Each session's directory lives under the JVM's temp directory and is deleted when the session ends or expires, and
+  the whole area when the JVM exits. Files are limited to 64 MiB each.
+- The session must be live: an unknown id is refused, never created.
+- Exposure and origin policy are exactly `/mcp`'s. The route is always on; it grants nothing `eval` does not.
+
 ## Connecting Claude Code
 
 Point an HTTP MCP entry at the endpoint:
@@ -226,6 +262,8 @@ The defaults are built for the presumed case — a local dev JVM, a client on th
   emits permissive CORS headers; do not add them to make a browser test pass.
 - **No authentication is built in.** The trust boundary is the network: loopback, or a private network whose membership
   *is* the authentication.
+- **The port also takes files.** Whoever can reach `/mcp` can write files into the JVM's temp directory through
+  `/upload`. That is no more than `eval` already allows them.
 
 Wiring Remontoire into a deployed system is a deliberate act, and its consequences belong to whoever performs it.
 Nothing here makes a production REPL safe to expose; the design keeps it inert until someone with the authority to open

@@ -13,7 +13,11 @@
     [co.multiply.remontoire.registry :as registry]
     [co.multiply.remontoire.session :as session]
     [co.multiply.remontoire.tee :as tee]
-    [co.multiply.scoped :as sc]))
+    [co.multiply.remontoire.upload :as upload]
+    [co.multiply.scoped :as sc])
+  (:import
+    [java.net URLEncoder]
+    [java.nio.charset StandardCharsets]))
 
 
 (defn- whoami
@@ -262,6 +266,53 @@
         (enter! home))
       (remove-ns sym)
       sym)))
+
+
+(defn upload-url
+  "Where to send a file so it reaches this JVM without passing through
+   you: `curl -T <file> <url>` from your shell stages it under its own
+   name, and the response names the path it landed at. Append a name to
+   choose one; `/` in it nests.
+
+   A best guess, printed as such: it is the address your client's latest
+   request named, which a proxy or tunnel in between can make wrong.
+
+   Output shape:
+   String ; ends in `/`. nil when this session has made no request."
+  []
+  (let [sid (whoami)]
+    (when-let [address (session/address sid)]
+      (println (str "Best guess, from the address this session's last request named."
+                 " If it does not answer, check the MCP config or ask the human."))
+      (str address "/upload/"
+        (str/replace (URLEncoder/encode ^String sid StandardCharsets/UTF_8) "+" "%20")
+        "/"))))
+
+
+(defn uploads
+  "The files staged in this JVM's upload area, yours first — sent to
+   `upload-url`, kept until their session ends. Attribution, not
+   isolation, as with `evals`.
+
+   A staged file is an ordinary file: `load-file` it, `slurp` it, move it
+   to where it belongs or delete it — the listing reads the directory, so
+   it follows whatever you do. Sending a name again replaces the file.
+
+   Output shape:
+   [{:name String  ; as sent, `/`-separated
+     :path String  ; absolute, the JVM's own
+     :size Long    ; bytes
+     :at   Inst    ; last written
+     :by   String} ; owner's id prefix — only on files you didn't send
+    …]"
+  []
+  (let [caller (whoami)]
+    (into []
+      (mapcat (fn [[sid dir]]
+                (cond->> (upload/staged dir)
+                  (not= sid caller)
+                  (map #(assoc % :by (subs sid 0 (min 8 (count sid))))))))
+      (sort-by (fn [[sid]] [(not= sid caller) sid]) (session/upload-dirs)))))
 
 
 (defn scoped-fn

@@ -1,6 +1,6 @@
 (ns co.multiply.remontoire.patterns
-  "Recipes: each namespace below demonstrates one shape of async eval
-   against this system, as real code — loaded with the library, so a
+  "Recipes: each namespace below demonstrates one shape of eval work
+   against this system — most of them async — as real code — loaded with the library, so a
    recipe that stops compiling breaks the load rather than quietly
    rotting. `(__r/nses \"patterns\")` is the index; `outline` a recipe
    namespace for its signatures and docstrings; `file` it for the
@@ -21,4 +21,5 @@
     [co.multiply.remontoire.patterns.iteration]
     [co.multiply.remontoire.patterns.outliving]
     [co.multiply.remontoire.patterns.parallelism]
-    [co.multiply.remontoire.patterns.partial-results]))
+    [co.multiply.remontoire.patterns.partial-results]
+    [co.multiply.remontoire.patterns.uploads]))
