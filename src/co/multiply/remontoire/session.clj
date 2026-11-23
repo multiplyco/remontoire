@@ -1,18 +1,18 @@
 (ns co.multiply.remontoire.session
   "Session state: who is connected, when they last spoke, and the
    conversational state that belongs to one dialogue rather than to the JVM —
-   the sticky namespace, the told-once ledger's audience, the tool-list
-   fetch marker, queued eviction news (§11).
+   the sticky namespace, the told-once ledger's audience, queued eviction
+   news (§11).
 
-   Streamable HTTP sessions are server-minted: `initialize` gets an id in
-   the `Mcp-Session-Id` response header and the client echoes it on every
-   subsequent request (measured 2026-08-04, claude-code 2.1.220). Sessions
-   are cheap and ephemeral — a reconnect abandons the old one without the
-   spec's DELETE goodbye (measured the same day) — so everything here
-   expires by silence, and an id never seen before is adopted rather than
-   404'd: after a server restart the client keeps presenting its old id,
-   and forcing a re-initialize would buy spec strictness at the price of
-   churn. A deliberate deviation, recorded in §11.
+   A session is a handle the `create-session` tool mints and every other
+   tool call names in its arguments, whichever MCP revision the client
+   speaks. It lives in the model's context, not in the connection, so it
+   outlasts a reconnect; it expires by silence, and a handle this server
+   does not hold is refused, never adopted.
+
+   The earlier revisions' `Mcp-Session-Id` names no session. It is a
+   connection: what a client said at `initialize`, and which tool list it
+   last fetched — the last section here.
 
    State lives behind `defonce` for the same reason the registry's does:
    library reloads must not end anyone's session.
@@ -45,16 +45,14 @@
    rails exactly as `tee/*bank*` is (§11), so code like `(evals)` can tell
    the caller's entries from another session's. nil at the root means a
    sessionless in-process caller — a human at the actual REPL calling api
-   functions directly; the transport never admits one (bare requests are
-   400'd, 2026-08-06)."
+   functions directly; the wire never admits one."
   nil)
 
 
-;; sid → {:last-seen ms, :client m, :current-ns sym, :fetched-tools decls,
-;;        :evictions [ids], :manual-read bool, :nudged bool,
-;;        :upload-dir Path, :address str}. Keys are
-;; transport-minted ids, never nil: a
-;; request without one is refused at the door (http, 2026-08-06).
+;; sid → {:last-seen ms, :client m, :current-ns sym, :evictions [ids],
+;;        :manual-read bool, :nudged bool, :upload-dir Path, :address str}.
+;; Keys are minted handles, never nil: a tool call naming no live session
+;; is refused (§11).
 (defonce ^:private state (atom {}))
 
 
@@ -63,30 +61,14 @@
   (System/currentTimeMillis))
 
 
-(defn seen!
-  "Refresh `sid`'s last-seen stamp, adopting an unknown id — a restarted
-   server's returning client presents an id minted before the restart.
-   Returns `sid` so establishing a session reads as one expression."
-  [sid]
-  (swap! state assoc-in [sid :last-seen] (now))
-  sid)
-
-
-(defn mint!
-  "A fresh session, born now. The transport puts the id in the `initialize`
-   response's `Mcp-Session-Id` header; the client echoes it thereafter."
-  []
-  (seen! (str (UUID/randomUUID))))
-
-
 (def ^:private handle-letters
   "Consonants only, so a handle never spells a word: 20³ = 8000 handles."
   "bcdfghjklmnpqrstvwxz")
 
 
-(defn mint-handle!
-  "A fresh session for the stateless era (§11), born now, named by three
-   random consonants the model passes as an ordinary tool argument. Redrawn
+(defn mint!
+  "A fresh session (§11), born now, named by three random consonants the
+   model passes as an ordinary tool argument. Redrawn
    against live sessions, so a collision is only ever with a handle from a
    previous boot — and the space is sparse, so a typo or a stale handle
    almost always names nothing and is refused loudly, where a counter's
@@ -100,57 +82,41 @@
 
 
 (defn live?
-  "Whether `sid` names a session this server holds. The stateless era
-   refuses what the legacy era adopts: a handle is a tool argument, and an
-   unknown one is a stale or mistyped one (§11)."
+  "Whether `sid` names a session this server holds. A handle is a tool
+   argument, and an unknown one is a stale or mistyped one (§11)."
   [sid]
   (contains? @state sid))
 
 
 (defn refresh!
-  "Refresh `sid`'s last-seen stamp only if it is live — liveness evidence
-   that arrives without a request establishing the session (a heartbeat
-   write, a task poll) must never mint one."
+  "Refresh `sid`'s last-seen stamp if it is live, and say whether it was.
+   Never mints: neither a call naming a handle nor liveness evidence that
+   arrives beside one — a heartbeat write, a task poll, an upload — may
+   create the session it names."
   [sid]
-  (swap! state
-    (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :last-seen] (now)))))
-  nil)
-
-
-(defn- sid-tag
-  "`sid` as text safe to build names from — the same 8-char id prefix `:by`
-   attribution wears, filtered to letters and digits, since an adopted sid
-   is client-chosen text (hashed whole when nothing survives the filter)."
-  [sid]
-  (let [tag (into [] (comp (filter #(Character/isLetterOrDigit (char %)))
-                       (take 8))
-              sid)]
-    (if (seq tag)
-      (apply str tag)
-      (Integer/toHexString (hash sid)))))
+  (let [[before] (swap-vals! state
+                   (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :last-seen] (now)))))]
+    (contains? before sid)))
 
 
 (defn scratch-ns-sym
   "The scratch namespace `sid`'s evals start in. Per session, so two
-   tenants' defs and requires cannot collide — named by the same 8-char id
-   prefix `:by` attribution wears, `s`-prefixed into a legal symbol
-   segment and filtered to what a symbol can carry, since an adopted sid
-   is client-chosen text (hashed whole when nothing survives the filter).
-   nil — the sessionless in-process caller, never the wire — keeps the
-   shared scratch: no session to die with, nothing to reap."
+   tenants' defs and requires cannot collide — named by the handle, behind
+   an `s`. nil — the sessionless in-process caller, never the wire — keeps
+   the shared scratch: no session to die with, nothing to reap."
   [sid]
   (if (nil? sid)
     'co.multiply.remontoire.scratch
-    (symbol (str "co.multiply.remontoire.scratch.s" (sid-tag sid)))))
+    (symbol (str "co.multiply.remontoire.scratch.s" sid))))
 
 
 (defn scratch-sub-ns-sym
   "The namespace symbol for `sid`'s scratch compartment named `label` —
    nested under the session's scratch, so uniqueness across sessions comes
-   from the sid tag and the label stays whatever the caller chose. Within
+   from the handle and the label stays whatever the caller chose. Within
    a session the same label always names the same namespace: the label is
    the compartment's identity. `label` is caller-chosen text, filtered to
-   what a symbol segment can carry like the sid is — `-` and `_` kept,
+   what a symbol segment can carry — `-` and `_` kept,
    `s`-prefixed when the survivors don't open with a letter, hashed whole
    when nothing survives."
   [sid label]
@@ -258,14 +224,14 @@
 
 (defn upload-dir!
   "`sid`'s upload directory, minted on first use: a fresh directory named
-   by the sid tag and a random suffix, so the path is never something a
+   by the handle and a random suffix, so the path is never something a
    client constructs — it is asked for. nil for a sid that is not live: an
    upload must never mint the session it names."
   ^Path [sid]
   (locking upload-root
     (or (upload-dir sid)
       (when (live? sid)
-        (let [dir (Files/createTempDirectory @upload-root (str (sid-tag sid) "-")
+        (let [dir (Files/createTempDirectory @upload-root (str sid "-")
                     (make-array FileAttribute 0))]
           (swap! state
             (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :upload-dir] dir))))
@@ -326,10 +292,11 @@
 
 
 (defn client!
-  "What `initialize` said about the caller — protocol version, client name
-   and version, capabilities. Kept per session because clients keep
-   teaching us their actual shape (§4), and knowing which client and
-   version a measurement was made against keeps the measurements honest."
+  "What the caller said about itself — protocol version, client name and
+   version, capabilities — recorded as the session is created. Kept per
+   session because clients keep teaching us their actual shape (§4), and
+   knowing which client and version a measurement was made against keeps
+   the measurements honest."
   [sid m]
   (swap! state assoc-in [sid :client] m)
   nil)
@@ -417,8 +384,7 @@
 
 (defn current-ns!
   "Where `sid`'s last eval ended — the sticky namespace is conversational
-   state, so it lives and dies with the session; a reconnect starts back
-   at scratch (§11)."
+   state, so it lives and dies with the session (§11)."
   [sid ns-sym]
   (swap! state assoc-in [sid :current-ns] ns-sym)
   nil)
@@ -427,20 +393,6 @@
 (defn current-ns
   [sid]
   (get-in @state [sid :current-ns]))
-
-
-(defn fetched-tools!
-  "The tool declarations as `sid` last actually fetched them. Per session,
-   for the same reason the marker exists at all (§4): a lost announcement
-   re-announces on the next stream, and each client's cache is its own."
-  [sid decls]
-  (swap! state assoc-in [sid :fetched-tools] decls)
-  nil)
-
-
-(defn fetched-tools
-  [sid]
-  (get-in @state [sid :fetched-tools]))
 
 
 (defn note-evictions!
@@ -471,3 +423,79 @@
         (contains? m sid)
         (update-in [sid :evictions] #(into [] (remove (set ids)) %)))))
   nil)
+
+
+;; # Connections
+;; ################################################################################
+;;
+;; The revisions before 2026-07-28 open with `initialize`, and the server
+;; answers with an `Mcp-Session-Id` the client echoes on every request
+;; (measured 2026-08-04). That id names a connection, not a session: a
+;; reconnect arrives bare and is given a new one, while the handle in the
+;; model's context carries on. A connection holds only what the wire itself
+;; needs remembered between requests.
+
+;; cid → {:last-seen ms, :client m, :fetched-tools decls}
+(defonce ^:private connections (atom {}))
+
+
+(defn connect!
+  "A fresh connection id, for the `initialize` response's `Mcp-Session-Id`
+   header. Connections silent for longer than `expiry-ms` are forgotten
+   here: a client that reconnects abandons its old id without a goodbye
+   (measured 2026-08-04), and every reconnect passes this way."
+  []
+  (let [cid    (str (UUID/randomUUID))
+        t      (now)
+        cutoff (- t expiry-ms)]
+    (swap! connections
+      (fn [m]
+        (-> (into {} (remove (fn [[_ c]] (< (:last-seen c 0) cutoff))) m)
+          (assoc cid {:last-seen t}))))
+    cid))
+
+
+(defn connected!
+  "Refresh `cid`'s last-seen stamp, adopting an id never seen — a client
+   that outlived a server restart keeps presenting its old one, and all it
+   has lost is a record that refills. Returns `cid`."
+  [cid]
+  (swap! connections assoc-in [cid :last-seen] (now))
+  cid)
+
+
+(defn disconnect!
+  "Forget `cid` — the spec's DELETE goodbye. Sessions are untouched: they
+   belong to conversations, and expire by silence."
+  [cid]
+  (swap! connections dissoc cid)
+  nil)
+
+
+(defn connection-client!
+  "What `initialize` said about the client on `cid` — protocol version,
+   client name and version, capabilities. Copied onto each session created
+   over the connection."
+  [cid m]
+  (swap! connections assoc-in [cid :client] m)
+  nil)
+
+
+(defn connection-client
+  [cid]
+  (get-in @connections [cid :client]))
+
+
+(defn fetched-tools!
+  "The tool declarations as `cid` last actually fetched them. Per
+   connection, because `tools/list` names no session and each client's
+   cache is its own (§4): a lost announcement re-announces on the next
+   stream."
+  [cid decls]
+  (swap! connections assoc-in [cid :fetched-tools] decls)
+  nil)
+
+
+(defn fetched-tools
+  [cid]
+  (get-in @connections [cid :fetched-tools]))

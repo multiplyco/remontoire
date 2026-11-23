@@ -15,7 +15,6 @@
     [clojure.string :as str]
     [co.multiply.quiescent.impl.executor :as q.exec]
     [co.multiply.remontoire.mcp :as mcp]
-    [co.multiply.remontoire.registry :as registry]
     [co.multiply.remontoire.session :as session]
     [co.multiply.remontoire.tee :as tee]
     [co.multiply.remontoire.upload :as upload])
@@ -66,24 +65,32 @@
   (Headers/.getFirst (HttpExchange/.getRequestHeaders exchange) k))
 
 
-(defn- session!
-  "Establish the request's session (§11). An `initialize` is a birth: a
-   fresh id is minted and set on the response header, any id the request
-   presented deliberately ignored — the client's own reconnects arrive
-   bare (measured 2026-08-04). Anything else refreshes the id it carries —
-   unknown ids are adopted (a restarted server; see the session ns) — or
-   returns nil for a request carrying none, which `serve!` 400s: every
-   client initializes before anything else, so a bare request is a broken
-   one, and the loud refusal replaced a shared id-less identity that would
-   have silently pooled strangers' scratch and claims (2026-08-06, §11)."
+(defn- connection!
+  "The legacy wire's connection for this request (§11). An `initialize`
+   opens one: a fresh id is minted and set on the response header, any id
+   the request presented deliberately ignored — the client's own
+   reconnects arrive bare (measured 2026-08-04). Anything else refreshes
+   the id it carries, known or not, and a request carrying none has no
+   connection, which costs it only the tool-list announcement. No session
+   hangs off the id: a tool call names its own."
   [exchange payload]
   (let [init? (let [im? #(= "initialize" (:method %))]
                 (boolean (if (sequential? payload) (some im? payload) (im? payload))))]
     (if init?
-      (let [sid (session/mint!)]
-        (Headers/.set (HttpExchange/.getResponseHeaders exchange) "Mcp-Session-Id" sid)
-        sid)
-      (some-> (header exchange "Mcp-Session-Id") session/seen!))))
+      (let [cid (session/connect!)]
+        (Headers/.set (HttpExchange/.getResponseHeaders exchange) "Mcp-Session-Id" cid)
+        cid)
+      (some-> (header exchange "Mcp-Session-Id") session/connected!))))
+
+
+(defn- named-sessions
+  "The sessions a payload's tool calls name in their arguments, each once
+   — a batch may name several. Unchecked: what they are used for must not
+   mint."
+  [payload]
+  (into []
+    (comp (filter map?) (keep #(get-in % [:params :arguments :session-id])) (distinct))
+    (if (sequential? payload) payload [payload])))
 
 
 (defn- note-address!
@@ -169,8 +176,9 @@
    it does not own destroys information twice. A silent eval gets a plain
    elapsed-time beat each `heartbeat-ms` instead, feeding the client's idle
    timer. The cursor advances only on an emitted beat, so nothing is ever
-   dropped between beats."
-  [out done token sid display]
+   dropped between beats. Every session in `sids` is kept fresh by a beat:
+   a batch's later calls wait behind its earlier ones on this one stream."
+  [out done token sids display]
   (Thread/startVirtualThread
     (fn []
       (loop [n 1 cursor 0 polls 0 idle 0]
@@ -190,10 +198,10 @@
                            ;; is still there: open streams are
                            ;; liveness (§11), so a session mid-await
                            ;; can never expire under its own wait.
-                           ;; Guarded: a stateless call's sid is a
-                           ;; tool argument, and a beat must never
-                           ;; mint the session a refused handle names.
-                           (session/refresh! sid)
+                           ;; Guarded: a sid is a tool argument,
+                           ;; and a beat must never mint the session
+                           ;; a refused handle names.
+                           (run! session/refresh! sids)
                            true
                            (catch IOException _ false)))]
             (cond
@@ -215,17 +223,17 @@
    heartbeats while `compute` runs, then the response as the stream's one
    message, then close, which is the client's cue that the call is done.
    Returns the response when its write went out, nil when the client was
-   gone — the caller marks delivery only on the former. `announce?` gates
-   the tool-list announcement, which the stateless era replaces with
-   `ttlMs` on the list itself."
-  [exchange progress-token sid announce? display compute]
+   gone — the caller marks delivery only on the former. `changed?`, when
+   given, is asked whether the client's tool list is stale; the stateless
+   wire gives none, having `ttlMs` on the list itself."
+  [exchange progress-token sids changed? display compute]
   (Headers/.set (HttpExchange/.getResponseHeaders exchange) "Content-Type" sse-content-type)
   ;; 0 = chunked: the stream stays open until the exchange closes.
   (HttpExchange/.sendResponseHeaders exchange 200 0)
   (let [out  (HttpExchange/.getResponseBody exchange)
         done (promise)]
     (write! out ": open\n\n")
-    (heartbeat! out done progress-token sid display)
+    (heartbeat! out done progress-token sids display)
     (let [response (try (compute) (finally (deliver done ::done)))]
       (try
         ;; The one server-initiated notification this transport speaks, and
@@ -234,7 +242,7 @@
         ;; promptly (measured 2026-08-04). Announced ahead of the response
         ;; and re-announced each stream until a `tools/list` actually lands
         ;; — losing one costs nothing.
-        (when (and announce? (mcp/tools-changed? sid))
+        (when (and changed? (changed?))
           (write! out (str "data: "
                         (encode {:jsonrpc "2.0"
                                  :method  "notifications/tools/list_changed"})
@@ -310,66 +318,58 @@
       [-32020 "Header mismatch: Mcp-Name header must carry the request's taskId."])))
 
 
+(defn- answer!
+  "Answer `payload` with what `dispatch` makes of it, on either wire: an
+   SSE stream for a `tools/call` when the client accepts one, plain JSON
+   otherwise, 202 when only notifications came. Delivery marks land only
+   after the write that carried them (§5). The sessions the calls name are
+   the ones its heartbeats keep fresh, and the ones told how they were
+   addressed. `dispatch` takes what the transport adds to the context."
+  [exchange payload changed? dispatch]
+  (let [sids (named-sessions payload)]
+    (run! #(note-address! exchange %) sids)
+    ;; Heard from on arrival, not at its own call's turn: a batch's later
+    ;; calls wait behind its earlier ones, whose admissions sweep the silent.
+    (run! session/refresh! sids)
+    (if (and (accepts-sse? exchange) (wants-stream? payload))
+      ;; The display cell exists before the eval does — the heartbeat loop
+      ;; starts first — so the handler fills it in once the bank is minted.
+      (let [display (atom nil)]
+        (some-> (respond-sse! exchange (progress-token payload) sids changed? display
+                  #(dispatch {:display display}))
+          (mark-delivered!)))
+      (if-let [response (dispatch {})]
+        (do (respond! exchange 200 json-content-type (encode response))
+          ;; A client that timed out threw above instead, leaving its
+          ;; entry owed, protected and announceable.
+          (mark-delivered! response))
+        ;; Notifications only: accepted, nothing to say back.
+        (respond! exchange 202 nil nil)))))
+
+
 (defn- serve-modern!
-  "A stateless-era request (§11): no transport session — `create-session`
-   mints one as a tool, and each call names it in its arguments, which is
-   also the session the heartbeats keep fresh. Otherwise the legacy shape:
-   SSE for a `tools/call` when accepted, plain JSON else, delivery marks
-   only after the write that carried them."
+  "A stateless-wire request (§11): nothing but its own headers to check."
   [exchange payload peer]
   (if-let [[code message] (modern-refusal exchange payload)]
     (respond! exchange 400 json-content-type
       (encode {:jsonrpc "2.0"
                :id      (when (map? payload) (:id payload))
                :error   {:code code :message message}}))
-    (let [ctx {:peer peer}
-          sid (get-in payload [:params :arguments :session-id])]
-      (when sid (note-address! exchange sid))
-      (if (and (accepts-sse? exchange) (= "tools/call" (:method payload)))
-        (let [display (atom nil)]
-          (some-> (respond-sse! exchange (progress-token payload) sid false display
-                    #(mcp/handle-modern payload (assoc ctx :display display)))
-            (mark-delivered!)))
-        (if-let [response (mcp/handle-modern payload ctx)]
-          (do (respond! exchange 200 json-content-type (encode response))
-            (mark-delivered! response))
-          (respond! exchange 202 nil nil))))))
+    (answer! exchange payload nil
+      #(mcp/handle-modern payload (assoc % :peer peer)))))
 
 
 (defn- serve-legacy!
-  "A legacy-era request: the session rides `Mcp-Session-Id`, minted at
-   `initialize`."
+  "A legacy-wire request: its connection rides `Mcp-Session-Id`, opened at
+   `initialize`, and is what a stale tool list is announced to."
   [exchange payload peer]
-  (let [sid (session! exchange payload)
-        ctx {:peer peer :session sid}]
-    (when sid (note-address! exchange sid))
-    (cond
-      (nil? sid)
-      (respond! exchange 400 "text/plain"
-        "Mcp-Session-Id required — initialize first")
-
-      (and (accepts-sse? exchange) (wants-stream? payload))
-      ;; The display cell exists before the eval does — the heartbeat loop
-      ;; starts first — so the handler fills it in once the bank is minted.
-      (let [display (atom nil)]
-        (some-> (respond-sse! exchange (progress-token payload) sid true display
-                  #(mcp/handle-payload payload (assoc ctx :display display)))
-          (mark-delivered!)))
-
-      :else
-      (let [response (mcp/handle-payload payload ctx)]
-        (if response
-          (do
-            (respond! exchange 200 json-content-type (encode response))
-            ;; A client that timed out threw above instead, leaving its
-            ;; entry owed, protected and announceable.
-            (mark-delivered! response))
-          ;; Notifications only: accepted, nothing to say back.
-          (respond! exchange 202 nil nil))))))
+  (let [cid (connection! exchange payload)]
+    (answer! exchange payload (when cid #(mcp/tools-changed? cid))
+      #(mcp/handle-payload payload (assoc % :peer peer :connection cid)))))
 
 
 (defn- serve!
-  "Parse one POST body and serve it in its era — stateless when the
+  "Parse one POST body and serve it on its wire — stateless when the
    `MCP-Protocol-Version` header names the 2026-07-28 revision, legacy
    otherwise; both on one endpoint, which the revision blesses (§11)."
   [exchange]
@@ -393,15 +393,15 @@
       (not (origin-allowed? exchange allowed-origins))
       (respond! exchange 403 "text/plain" "Forbidden origin")
 
-      ;; The spec's session goodbye — never observed from claude-code,
-      ;; whose reconnects abandon their old session in silence (measured
-      ;; 2026-08-04), but honored: the session's claims lapse now rather
-      ;; than at expiry (§11). GET — the client offering to open a
-      ;; server-initiated stream this transport does not speak (§4) —
-      ;; falls through to the 405 below, which it tolerates.
+      ;; The legacy wire's goodbye — never observed from claude-code,
+      ;; whose reconnects abandon their old connection in silence
+      ;; (measured 2026-08-04), but honored: the connection is forgotten.
+      ;; Sessions are not its to end (§11). GET — the client offering to
+      ;; open a server-initiated stream this transport does not speak (§4)
+      ;; — falls through to the 405 below, which it tolerates.
       (= "DELETE" (HttpExchange/.getRequestMethod exchange))
-      (if-let [sid (header exchange "Mcp-Session-Id")]
-        (do (registry/release-session! sid)
+      (if-let [cid (header exchange "Mcp-Session-Id")]
+        (do (session/disconnect! cid)
           (respond! exchange 204 nil nil))
         (respond! exchange 400 "text/plain" "Mcp-Session-Id required"))
 
@@ -420,13 +420,11 @@
 
 
 (defn- handle-probe!
-  "The sessionless door: identity as plain JSON — no session minted, no
-   registry or session state touched. Discovery and health probes arrive
-   from several operators, several times a day, against every environment;
-   answering them through `initialize` would fill the roster with ghost
-   sessions, polluting exactly the surface built for tenant mutual
-   awareness (§11). Same origin policy as `/mcp`; GET only, the whole
-   point being a curl-friendly read."
+  "The sessionless door: identity as plain JSON — nothing minted, no
+   registry or session state touched — for the discovery and health
+   probes that arrive from several operators, several times a day (§11).
+   Same origin policy as `/mcp`; GET only, the whole point being a
+   curl-friendly read."
   [exchange allowed-origins]
   (try
     (cond

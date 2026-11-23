@@ -313,3 +313,32 @@
   To measure in the spike: whether Claude Code declares the extension on `tools/list` as well as `tools/call`; what
   the model sees when a call becomes a task (does `statusMessage` reach it); whether TaskStop sends `tasks/cancel`;
   the client's actual poll cadence; and, once, what a task answer after the client's own 120 s backgrounding does.
+
+  **One session notion on both wires (2026-11-23).** The legacy wire had kept the session it was born with: minted
+  at `initialize`, carried in `Mcp-Session-Id`, adopted when unknown. That made two of everything — two tool tables,
+  two call paths, two id shapes, two answers to an unknown id — and it left the legacy session with the weakness the
+  handle was designed to cure: a reconnect arrives bare, so a conversation lost its scratch namespace and its unread
+  results whenever its client reconnected. Now a session is the handle on both wires, and the record above is
+  superseded where it says otherwise:
+
+  - *`create-session` and `session-id` are every client's.* The legacy tool list is the stateless one a
+    non-declaring client gets; a call naming no live session is refused with the same teaching text. A session
+    therefore survives a reconnect on either wire, and "a session must never bake its id into data" no longer
+    follows from reconnects.
+  - *`Mcp-Session-Id` names a connection.* It holds what the wire itself needs between requests and nothing
+    conversational: what the client said at `initialize`, copied onto each session created over it, and the tool
+    list it last fetched, which is what `tools/list_changed` is announced against — `tools/list` names no session,
+    so that marker could not move to the handle.
+  - *Unknown handles are refused on both wires; unknown connection ids are still adopted.* Adoption was right for
+    what a connection holds — a client that outlived a restart loses a record that refills on its next request, and
+    is told to re-fetch its tools — and wrong for a session, where it handed back an empty scratch under an old
+    name without a word.
+  - *A request without `Mcp-Session-Id` is served.* The 400 of 2026-08-06 guarded against strangers pooling one
+    id-less session; a connection has nothing to pool, and a call still needs its handle.
+  - *`DELETE` forgets the connection and ends no session.* A session ends by silence, as it always has on the
+    stateless wire. No client was ever seen to send it.
+  - *What went:* the UUID branch of session ids, and with it the filtering of ids into namespace-legal text and
+    the 8-character prefix `:by` wore — a handle is short and minted here.
+
+  Tried the same day against the dev server with `curl` as a legacy client (logbook). Not yet driven by a real
+  legacy client.

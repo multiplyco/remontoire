@@ -179,14 +179,14 @@
    judgment stays the model's; repeating it would spend this footer's
    credibility, the channel evictions and truncations must be believed
    on."
-  [{:keys [id note ns forms truncated settled evicted nudge handle]}]
+  [{:keys [id note ns forms truncated settled evicted nudge session]}]
   (str ";; id " id
     (when note (str " · " note))
     " · ns " ns
     (when (and forms (> forms 1)) (str ", " forms " forms"))
-    ;; The stateless era's session handle rides every footer, so it is
-    ;; ambient rather than remembered (§11).
-    (when handle (str " · session " handle))
+    ;; The session handle rides every footer, so it is ambient rather
+    ;; than remembered (§11).
+    (when session (str " · session " session))
     (when-let [[n exact] truncated]
       (str "\n;; truncated — "
         (cond
@@ -209,9 +209,8 @@
    what `tasks/get` delivers for an eval the client followed as a task, so
    the two can never drift. Everything keys off `registry/status` — the
    same triage `(evals)` shows a caller. `evicted` is the admission's own
-   losses; `handle` the stateless-era session handle the footer echoes
-   (§11), nil on the legacy wire."
-  [{:keys [id task details bank baseline] requested-ns :requested-ns} {:keys [session evicted handle]}]
+   losses."
+  [{:keys [id task details bank baseline] requested-ns :requested-ns} {:keys [session evicted]}]
   (let [ns      requested-ns
         status  (registry/status task)
         ;; Minus this eval's own entry, which the response reports anyway —
@@ -255,7 +254,7 @@
                                   :settled settled
                                   :evicted evicted
                                   :nudge   nudge
-                                  :handle  handle}
+                                  :session session}
                             opts)))
         ;; What the eval printed, when it printed — present in every
         ;; branch, because a `running` or `failed` eval's output is often
@@ -358,7 +357,7 @@
    with `tasks/get`, which delivers the response `report` renders. Once
    the task answer is out, the entry is told — the client announces its
    ending, so `;; settled` news never does (§11)."
-  [{:keys [code ns await background]} {:keys [peer display session tasks? modern?] ::keys [request-id]}]
+  [{:keys [code ns await background]} {:keys [peer display session tasks?] ::keys [request-id]}]
   (let [{:keys [task details baseline bank]} (evaluate/evaluate code ns session)
         {:keys [id evicted]}
         (registry/capture! {:task         task
@@ -384,8 +383,7 @@
         (when (seq evicted) (session/note-evictions! session evicted))
         {::task      (assoc (task-state (registry/entry id)) :resultType "task")
          ::delivered #(registry/told! [id])})
-      (report (registry/entry id)
-        {:session session :evicted evicted :handle (when modern? session)}))))
+      (report (registry/entry id) {:session session :evicted evicted}))))
 
 
 (defn- await-handler
@@ -456,7 +454,7 @@
 
 (def ^:private eval-async-deadline
   "How eval's description explains long work where the caller's deadline
-   governs: the legacy wire, and stateless clients that do not follow tasks."
+   governs: to a client that does not follow MCP tasks."
   (str
     "Every evaluation is captured in a rolling registry, and every "
     "response carries its id — a handle to the work, usable before it "
@@ -580,29 +578,87 @@
     :handler     cancel-handler}])
 
 
+(def ^:private tasks-extension
+  :io.modelcontextprotocol/tasks)
+
+
+(defn- create-session-handler
+  "Mint a handle and record what the client said about itself — the first
+   call, so the session knows its client's capabilities from birth; they
+   shape the teaching surface, never what a request is sent."
+  [_ {:keys [client]}]
+  (let [sid (session/mint!)]
+    (session/client! sid client)
+    {:text (str "Session " sid " — pass \"session-id\": \"" sid "\" to every other remontoire tool.\n"
+             "It holds this conversation's scratch namespace, current namespace and unread "
+             "results. It expires after a day of silence and does not survive a server "
+             "restart; when an id is refused, create a new session.")}))
+
+
+(def ^:private create-session-tool
+  {:name        "create-session"
+   :description (str "Start a Remontoire session and return its id. Call this first: every "
+                  "other tool requires the id as `session-id`. A session holds this "
+                  "conversation's scratch namespace, current namespace and unread results.")
+   :inputSchema {:type "object" :properties {}}
+   :handler     create-session-handler})
+
+
+(defn- with-session-id
+  [tool]
+  (-> tool
+    (assoc-in [:inputSchema :properties :session-id]
+      {:type        "string"
+       :description "The session id `create-session` returned."})
+    (update-in [:inputSchema :required] (fnil conj []) "session-id")))
+
+
 (def ^:private by-name
-  (into {} (map (juxt :name identity)) tools))
+  "Every tool as it is called, listed or not — a client holding a list
+   from before its declaration changed can still call what it holds."
+  (into {"create-session" create-session-tool}
+    (map (juxt :name with-session-id))
+    tools))
+
+
+(def ^:private background-property
+  "The tasks path's one say over waiting (§11): skip the grace."
+  {:type        "boolean"
+   :description (str "Answer as a task at once instead of waiting up to " (quot task-grace 1000)
+                  " s — for work known to be long, like a polling loop. Default false.")})
 
 
 (defn- declarations
-  "The tool table as the client sees it — handlers stripped."
-  []
-  (mapv #(dissoc % :handler) tools))
+  "The tool list as a client sees it, handlers stripped: `create-session`,
+   then every tool taking `session-id`. A client that follows MCP tasks
+   (`tasks?`) is listed an `eval` without a deadline and nothing else to
+   wait or cancel with (§11)."
+  [tasks?]
+  (let [listed (if tasks?
+                 [(-> (first (filter #(= "eval" (:name %)) tools))
+                    (assoc :description (eval-description eval-async-tasks))
+                    (update-in [:inputSchema :properties] dissoc :await)
+                    (assoc-in [:inputSchema :properties :background] background-property))]
+                 tools)]
+    (into [(dissoc create-session-tool :handler)]
+      (map (comp #(dissoc % :handler) with-session-id))
+      listed)))
 
 
 (defn tools-changed?
-  "Whether the tool set differs from what `sid` last fetched. Per session
-   (§11), and deliberately \"last fetched\", not \"last announced\": a lost
+  "Whether the tool set differs from what connection `cid` last fetched.
+   Deliberately \"last fetched\", not \"last announced\": a lost
    announcement re-announces on the next stream, and a client holding a
    list from a previous server run is told to refresh on its first call —
    the marker only advances when a `tools/list` actually serves the
    current set (§4). The transport asks before closing each response
-   stream and announces `tools/list_changed` while the answer is yes —
-   the client re-fetches promptly (measured 2026-08-04, claude-code
-   2.1.220), which is what makes a reloaded tool table reach a live
-   session without a reconnect."
-  [sid]
-  (not= (declarations) (session/fetched-tools sid)))
+   stream on the wire that has connections and announces
+   `tools/list_changed` while the answer is yes — the client re-fetches
+   promptly (measured 2026-08-04, claude-code 2.1.220), which is what
+   makes a reloaded tool table reach a live client without a reconnect.
+   The stateless wire has `ttlMs` on the list itself instead."
+  [cid]
+  (not= (declarations false) (session/fetched-tools cid)))
 
 
 (defn- result
@@ -622,11 +678,6 @@
   [{:type "text" :text s}])
 
 
-(defmulti ^:private handle
-  "Dispatch one JSON-RPC request (a message carrying an :id)."
-  :method)
-
-
 (defonce ^{:private true
            :doc     "`init!`-time options this namespace serves — currently
    `:describe`, the self-description woven into `instructions`. Behind
@@ -638,7 +689,7 @@
 
 (defn configure!
   "Adopt `init!`'s teaching-surface options. Called before the port opens,
-   so no initialize ever composes without them."
+   so no client ever connects without them."
   [opts]
   (swap! config merge opts)
   nil)
@@ -658,7 +709,8 @@
 
 
 (defn- instructions
-  "What every connecting client learns at initialize — deliberately lean,
+  "What every client learns on connecting — `initialize`'s answer, or
+   `server/discover`'s — deliberately lean,
    the third form of this surface (§4; the instructions arc in
    `doc/logbook/` carries the evidence): the eager channel is paid by every conversation in a
    project whether the REPL is used or not, goes stale against a
@@ -674,7 +726,8 @@
    its own (\"here: the production system behind …\"). And the pointer:
    `(__r/manual)` delivers the bulk fresh from the running build, its
    dedup clause living in the only place dedup can — the puller, who
-   alone knows what it already holds."
+   alone knows what it already holds. Last, the one step every call
+   depends on: `create-session`."
   []
   (str "Remontoire is a live connection into a running Clojure system: eval "
     "runs inside the JVM itself, among the loaded namespaces and running "
@@ -688,34 +741,8 @@
     "`(__r/outline 'some.ns)`. One var? `(__r/doc ns/x)` / `(__r/source ns/x)`. "
     "The file as written? `(__r/file 'some.ns)`. For evaluating code it uses "
     "async semantics: in your first eval, run `(__r/manual)`, unless you've "
-    "already read it in this conversation."))
-
-
-(defmethod handle "initialize" [{:keys [id params] ::keys [ctx]}]
-  ;; What the caller said about itself lives with its session (§11) — the
-  ;; transport minted one just before dispatching this.
-  (session/client! (:session ctx)
-    (select-keys params [:protocolVersion :clientInfo :capabilities]))
-  ;; v0 accepts whatever version the client proposes and echoes it back. Pin a
-  ;; supported set once we have seen what clients actually send — guessing at
-  ;; it now would only produce a mismatch we cannot observe.
-  (result id {:protocolVersion (:protocolVersion params)
-              ;; listChanged: the server may announce that the tool set
-              ;; changed — riding an open response stream, since this
-              ;; transport initiates nothing (§4).
-              :capabilities    {:tools {:listChanged true}}
-              :serverInfo      server-info
-              :instructions    (instructions)}))
-
-
-(defmethod handle "ping" [{:keys [id]}]
-  (result id {}))
-
-
-(defmethod handle "tools/list" [{:keys [id] ::keys [ctx]}]
-  (let [decls (declarations)]
-    (session/fetched-tools! (:session ctx) decls)
-    (result id {:tools decls})))
+    "already read it in this conversation. Call create-session first and "
+    "pass its id as `session-id` to every other tool."))
 
 
 (defn- content
@@ -747,17 +774,17 @@
       returned)))
 
 
-(defn- call-tool
-  "Run tool `tool-name` from `index` for request `id` — both eras' tool
-   call once the session is established. A tool that throws is not a
-   protocol error: it is a result the model is meant to see and react to,
-   so it comes back as :isError rather than as a JSON-RPC error. A handler
+(defn- run-tool
+  "Run tool `tool-name` for request `id`, its session — when it needs one
+   — already established in `ctx`. A tool that throws is not a protocol
+   error: it is a result the model is meant to see and react to, so it
+   comes back as :isError rather than as a JSON-RPC error. A handler
    answering with a task (`::task`) is answered with that task, which
    carries no content and so no news."
-  [id {tool-name :name :keys [arguments]} ctx index]
-  (if-let [{:keys [handler]} (index tool-name)]
+  [id tool-name arguments ctx]
+  (if-let [{:keys [handler]} (by-name tool-name)]
     (try
-      (let [returned (handler arguments (assoc (or ctx {}) ::request-id id))
+      (let [returned (handler arguments (assoc ctx ::request-id id))
             task     (when (map? returned) (::task returned))
             returned (cond-> returned (not task) (with-eviction-news (:session ctx)))
             response (result id (if task task (content returned)))]
@@ -774,8 +801,74 @@
     (error id -32602 (str "Unknown tool: " tool-name))))
 
 
+(defn- refusal
+  [sid]
+  (if (string? sid)
+    (str "Session " (pr-str sid) " is not live on this server — it expired, or was "
+      "minted before a restart. Call create-session for a new one.")
+    "No `session-id` — call create-session first and pass its id to every other tool."))
+
+
+(defn- call-tool
+  "A `tools/call`, on either wire: `create-session` needs no session;
+   every other tool requires a live one, named in its arguments, and an
+   unknown handle is refused, never adopted (§11) — the refusal teaches
+   the incantation. Naming a session is also what keeps it fresh."
+  [id {tool-name :name :keys [arguments]} ctx]
+  (let [sid (:session-id arguments)]
+    (cond
+      (or (= "create-session" tool-name) (nil? (by-name tool-name)))
+      (run-tool id tool-name arguments ctx)
+
+      (session/refresh! sid)
+      (run-tool id tool-name (dissoc arguments :session-id) (assoc ctx :session sid))
+
+      :else
+      (result id {:content (text (refusal sid)) :isError true}))))
+
+
+;; # The legacy wire (revisions before 2026-07-28)
+;; ################################################################################
+;;
+;; A client that opens with `initialize`. The transport gives it a
+;; connection id (`Mcp-Session-Id`), under which what it said about itself
+;; and the tool list it last fetched are remembered; `ctx` carries it as
+;; `:connection`. Sessions are not this wire's business — tool calls name
+;; theirs, as on the stateless wire.
+
+(defmulti ^:private handle
+  "Dispatch one JSON-RPC request (a message carrying an :id)."
+  :method)
+
+
+(defmethod handle "initialize" [{:keys [id params] ::keys [ctx]}]
+  (some-> (:connection ctx)
+    (session/connection-client! (select-keys params [:protocolVersion :clientInfo :capabilities])))
+  ;; v0 accepts whatever version the client proposes and echoes it back. Pin a
+  ;; supported set once we have seen what clients actually send — guessing at
+  ;; it now would only produce a mismatch we cannot observe.
+  (result id {:protocolVersion (:protocolVersion params)
+              ;; listChanged: the server may announce that the tool set
+              ;; changed — riding an open response stream, since this
+              ;; transport initiates nothing (§4).
+              :capabilities    {:tools {:listChanged true}}
+              :serverInfo      server-info
+              :instructions    (instructions)}))
+
+
+(defmethod handle "ping" [{:keys [id]}]
+  (result id {}))
+
+
+(defmethod handle "tools/list" [{:keys [id] ::keys [ctx]}]
+  (let [decls (declarations false)]
+    (some-> (:connection ctx) (session/fetched-tools! decls))
+    (result id {:tools decls})))
+
+
 (defmethod handle "tools/call" [{:keys [id params] ::keys [ctx]}]
-  (call-tool id params ctx by-name))
+  (call-tool id params
+    (assoc ctx :client (session/connection-client (:connection ctx)))))
 
 
 (defmethod handle :default [{:keys [id method]}]
@@ -784,8 +877,9 @@
 
 (defn- handle-message
   "One message. Notifications carry no :id and by JSON-RPC get no reply, so
-   they return nil. `ctx` is transport fact — the peer address — carried
-   under a namespaced key so it can never collide with protocol fields.
+   they return nil. `ctx` is transport fact — the peer address, the
+   connection — carried under a namespaced key so it can never collide
+   with protocol fields.
 
    One notification is acted on: an explicit client cancellation is
    id-directed cancel arriving over the wire — TaskStop sends it, verified
@@ -800,8 +894,9 @@
 
 
 (defn handle-payload
-  "A parsed request body — one message or a batch of them. Returns the response
-   payload, or nil when nothing in the batch warrants a reply."
+  "A parsed request body on the legacy wire — one message or a batch of
+   them. Returns the response payload, or nil when nothing in the batch
+   warrants a reply."
   ([payload] (handle-payload payload {}))
   ([payload ctx]
    (if (sequential? payload)
@@ -809,17 +904,16 @@
      (handle-message payload ctx))))
 
 
-;; # The stateless era (2026-07-28)
+;; # The stateless wire (2026-07-28)
 ;; ################################################################################
 ;;
-;; Served beside the legacy wire on the same endpoint, era chosen by the
-;; transport from the `MCP-Protocol-Version` header (§11). No `initialize`,
-;; no `Mcp-Session-Id`: the session is a handle `create-session` mints and
-;; every other tool takes as `session-id`; capabilities ride each request's
-;; `_meta`. A client declaring the tasks extension is listed only
-;; `create-session` and `eval`, and long evals answer as tasks — when the
-;; client follows tasks, its machinery is trusted over Remontoire's own
-;; `await` and `cancel`, which stay callable but unlisted.
+;; Served on the same endpoint, the wire chosen by the transport from the
+;; `MCP-Protocol-Version` header (§11). No `initialize` and no connection:
+;; what the client is rides each request's `_meta`. A client declaring the
+;; tasks extension is listed only `create-session` and `eval`, and long
+;; evals answer as tasks — when the client follows tasks, its machinery is
+;; trusted over Remontoire's own `await` and `cancel`, which stay callable
+;; but unlisted.
 
 (def protocol-version
   "The stateless revision this server speaks beside the legacy handshake."
@@ -830,116 +924,15 @@
   ["2025-11-25" "2025-06-18" "2025-03-26"])
 
 
-(def ^:private tasks-extension
-  :io.modelcontextprotocol/tasks)
-
-
-(defn- declares-tasks?
-  "Whether a request's `params` declare the tasks extension — per request,
-   so what the client receives always matches what that request said."
-  [params]
-  (contains? (get-in params [:_meta :io.modelcontextprotocol/clientCapabilities :extensions])
-    tasks-extension))
-
-
-(defn- create-session-handler
-  "Mint a handle and record what the client declared — the first call, so
-   the session knows its client's capabilities from birth; they shape the
-   teaching surface, never what a request is sent."
-  [_ {:keys [meta]}]
-  (let [sid (session/mint-handle!)]
-    (session/client! sid
-      {:protocolVersion (:io.modelcontextprotocol/protocolVersion meta)
-       :clientInfo      (:io.modelcontextprotocol/clientInfo meta)
-       :capabilities    (:io.modelcontextprotocol/clientCapabilities meta)
-       :tasks           (contains? (get-in meta [:io.modelcontextprotocol/clientCapabilities :extensions])
-                          tasks-extension)})
-    {:text (str "Session " sid " — pass \"session-id\": \"" sid "\" to every other remontoire tool.\n"
-             "It holds this conversation's scratch namespace, current namespace and unread "
-             "results. It expires after a day of silence and does not survive a server "
-             "restart; when an id is refused, create a new session.")}))
-
-
-(def ^:private create-session-tool
-  {:name        "create-session"
-   :description (str "Start a Remontoire session and return its id. Call this first: every "
-                  "other tool requires the id as `session-id`. A session holds this "
-                  "conversation's scratch namespace, current namespace and unread results.")
-   :inputSchema {:type "object" :properties {}}
-   :handler     create-session-handler})
-
-
-(defn- with-session-id
-  [tool]
-  (-> tool
-    (assoc-in [:inputSchema :properties :session-id]
-      {:type        "string"
-       :description "The session id `create-session` returned."})
-    (update-in [:inputSchema :required] (fnil conj []) "session-id")))
-
-
-(def ^:private modern-by-name
-  "Every stateless-era tool, listed or not — a client holding a list from
-   before its declaration changed can still call what it holds."
-  (into {"create-session" create-session-tool}
-    (map (juxt :name with-session-id))
-    tools))
-
-
-(def ^:private background-property
-  "The tasks path's one say over waiting (§11): skip the grace."
-  {:type        "boolean"
-   :description (str "Answer as a task at once instead of waiting up to " (quot task-grace 1000)
-                  " s — for work known to be long, like a polling loop. Default false.")})
-
-
-(defn- modern-declarations
-  "The tool list for a stateless request: with the tasks extension declared,
-   `create-session` and an `eval` without a deadline; otherwise all of it,
-   each tool taking `session-id`."
-  [tasks?]
-  (let [listed (if tasks?
-                 [(-> (by-name "eval")
-                    (assoc :description (eval-description eval-async-tasks))
-                    (update-in [:inputSchema :properties] dissoc :await)
-                    (assoc-in [:inputSchema :properties :background] background-property))]
-                 tools)]
-    (into [(dissoc create-session-tool :handler)]
-      (map (comp #(dissoc % :handler) with-session-id))
-      listed)))
-
-
-(defn- modern-instructions
-  []
-  (str (instructions)
-    " Call create-session first and pass its id as `session-id` to every other tool."))
-
-
-(defn- refusal
-  [sid]
-  (if (string? sid)
-    (str "Session " (pr-str sid) " is not live on this server — it expired, or was "
-      "minted before a restart. Call create-session for a new one.")
-    "No `session-id` — call create-session first and pass its id to every other tool."))
-
-
-(defn- modern-call
-  "A stateless `tools/call`: `create-session` needs no session; every other
-   tool requires a live one, and an unknown handle is refused, never adopted
-   (§11) — the refusal teaches the incantation."
-  [id {tool-name :name :keys [arguments] :as params} ctx]
-  (let [sid (:session-id arguments)]
-    (cond
-      (or (= "create-session" tool-name) (nil? (modern-by-name tool-name)))
-      (call-tool id params ctx modern-by-name)
-
-      (and (string? sid) (session/live? sid))
-      (do (session/seen! sid)
-        (call-tool id (update params :arguments dissoc :session-id)
-          (assoc ctx :session sid) modern-by-name))
-
-      :else
-      (result id {:content (text (refusal sid)) :isError true}))))
+(defn- declared-client
+  "What a stateless request's `_meta` says about its client, in the shape a
+   session records."
+  [meta]
+  (let [capabilities (:io.modelcontextprotocol/clientCapabilities meta)]
+    {:protocolVersion (:io.modelcontextprotocol/protocolVersion meta)
+     :clientInfo      (:io.modelcontextprotocol/clientInfo meta)
+     :capabilities    capabilities
+     :tasks           (contains? (:extensions capabilities) tasks-extension)}))
 
 
 (defn- followed-entry
@@ -966,7 +959,7 @@
   (let [status (registry/status task)]
     (if (= :running status)
       (result id (task-state entry))
-      (let [returned (-> (report entry {:session owner :evicted [] :handle owner})
+      (let [returned (-> (report entry {:session owner :evicted []})
                        (with-eviction-news owner))
             done     (assoc (task-state entry)
                        :lastUpdatedAt (str (java.time.Instant/now)))]
@@ -1002,11 +995,14 @@
 
 
 (defn handle-modern
-  "One stateless-era message, already past the transport's header checks.
+  "One stateless-wire message, already past the transport's header checks.
    Returns the response, or nil for a notification."
   [{:keys [id method params]} ctx]
-  (let [tasks? (declares-tasks? params)
-        ctx    (assoc ctx :modern? true :tasks? tasks? :meta (:_meta params))]
+  (let [client (declared-client (:_meta params))
+        ;; Per request, so what the client receives always matches what
+        ;; that request said.
+        tasks? (:tasks client)
+        ctx    (assoc ctx :tasks? tasks? :client client)]
     (if (nil? id)
       (do (when (= "notifications/cancelled" method)
             (cancel-request! (:requestId params)))
@@ -1016,7 +1012,7 @@
           "server/discover"
           (result id {:supportedVersions (into [protocol-version] legacy-versions)
                       :capabilities      {:tools {} :extensions {tasks-extension {}}}
-                      :instructions      (modern-instructions)
+                      :instructions      (instructions)
                       :ttlMs             300000
                       :cacheScope        "public"})
 
@@ -1025,11 +1021,11 @@
           ;; Varies with this request's declaration, hence private; short,
           ;; because a reloaded tool table has no other way to reach a
           ;; stateless client.
-          "tools/list" (result id {:tools      (modern-declarations tasks?)
+          "tools/list" (result id {:tools      (declarations tasks?)
                                    :ttlMs      60000
                                    :cacheScope "private"})
 
-          "tools/call" (modern-call id params ctx)
+          "tools/call" (call-tool id params ctx)
 
           ("tasks/get" "tasks/update" "tasks/cancel")
           (if tasks?

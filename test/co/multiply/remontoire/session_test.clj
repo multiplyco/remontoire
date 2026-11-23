@@ -14,15 +14,10 @@
 (deftest scratch-namespaces-are-per-session
   (is (= 'co.multiply.remontoire.scratch (session/scratch-ns-sym nil))
     "the sessionless in-process caller keeps the shared scratch")
-  (is (not= (session/scratch-ns-sym "abc-123-xyz")
-            (session/scratch-ns-sym "def-456-uvw")))
-  ;; an adopted sid is client-chosen text; whatever it holds, the scratch
-  ;; name must be a namespace-legal symbol
-  (doseq [sid ["!!!///:::" "we ird" ""]]
-    (let [sym (session/scratch-ns-sym sid)]
-      (is (symbol? sym))
-      (is (str/starts-with? (str sym) "co.multiply.remontoire.scratch.s"))
-      (is (nil? (re-find #"[^A-Za-z0-9.]" (str sym)))))))
+  (let [s1 (session/mint!)
+        s2 (session/mint!)]
+    (is (not= (session/scratch-ns-sym s1) (session/scratch-ns-sym s2)))
+    (is (session/scratch? (session/scratch-ns-sym s1)))))
 
 
 (deftest scratch-compartments-nest-under-the-session-scratch
@@ -75,9 +70,38 @@
     (is (not (session/live? "ghost")) "asking never mints a session")))
 
 
-(deftest unknown-ids-are-adopted-not-refused
-  (session/seen! "minted-before-a-restart")
-  (is (some #(= "minted-before-a-restart" (:sid %)) (session/roster))))
+(deftest a-handle-this-server-does-not-hold-is-never-adopted
+  (is (false? (session/refresh! "minted-before-a-restart")))
+  (is (not (session/live? "minted-before-a-restart")))
+  (is (true? (session/refresh! (session/mint!)))))
+
+
+(deftest a-connection-is-not-a-session
+  (let [cid (session/connect!)]
+    (session/connection-client! cid {:clientInfo {:name "suite"}})
+    (session/fetched-tools! cid [:decls])
+    (is (= "suite" (get-in (session/connection-client cid) [:clientInfo :name])))
+    (is (not (session/live? cid)))
+    (is (= [] (session/roster)) "and never appears on the roster")
+    (session/disconnect! cid)
+    (is (nil? (session/connection-client cid)))
+    (is (nil? (session/fetched-tools cid)))))
+
+
+(deftest an-unknown-connection-is-adopted
+  ;; A client that outlived a server restart keeps presenting its old id.
+  (is (= "from-before-a-restart" (session/connected! "from-before-a-restart")))
+  (session/fetched-tools! "from-before-a-restart" [:decls])
+  (is (= [:decls] (session/fetched-tools "from-before-a-restart"))))
+
+
+(deftest silent-connections-are-forgotten-when-another-opens
+  (let [old (session/connect!)]
+    (session/fetched-tools! old [:decls])
+    (swap! @#'session/connections assoc-in [old :last-seen] 0)
+    (let [fresh (session/connect!)]
+      (is (nil? (session/fetched-tools old)))
+      (is (contains? @@#'session/connections fresh)))))
 
 
 (deftest conversational-state-needs-a-live-session

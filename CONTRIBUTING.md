@@ -19,7 +19,7 @@ reloading a namespace takes effect without a restart.
 Test invariants, not wording. Exact error messages, instructions and renderings drift by design — don't pin them.
 Error-free behavior, retention guarantees and async semantics are the contract.
 
-`test_util.clj` carries the rigging: state resets reach both private atoms via `@#'`, and MCP dispatch tests must
+`test_util.clj` carries the rigging: state resets reach the private atoms via `@#'`, and MCP dispatch tests must
 emulate the transport's delivery discipline by invoking the `::mcp/delivered` metadata mark after each response.
 
 ## Things that break subtly if forgotten

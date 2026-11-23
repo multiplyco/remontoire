@@ -117,11 +117,12 @@ A few MCP tools, and a library of ordinary Clojure functions called through `eva
   message.
 - **`await`** — wait for ids to settle, with a mandatory deadline.
 - **`cancel`** — cancel ids, cooperatively, and report where each stands.
-- **`create-session`** — for clients speaking the stateless 2026-07-28 MCP revision, which carries no transport
-  session: called first, and its id passed to every other tool.
+- **`create-session`** — called first, and its id passed to every other tool. The session belongs to the
+  conversation rather than the connection, so it survives a reconnect; it expires after a day of silence.
 
 `await` and `cancel` are offered only to clients without MCP task support; with it, the client's own task handling
-waits and stops. Clients that open with `initialize` get the earlier revisions' handshake and no `create-session`.
+waits and stops. The tools are the same for a client on the stateless 2026-07-28 MCP revision and for one that opens
+with the earlier revisions' `initialize`.
 
 Inside evals, the toolkit is the `__r` namespace, aliased everywhere the agent goes: `nses`, `vars`, `outline`, `doc`,
 `source` and `file` for navigation; `res`, `evals`, `out` and `failure` for the registry; `sessions`, `introduce!`

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- A session is the same thing on every MCP revision: `create-session` mints it and every other tool takes it as
+  `session-id`. Clients that open with `initialize` used to get their session from the handshake, in the
+  `Mcp-Session-Id` header; they now call `create-session` like clients on the 2026-07-28 revision, and their tools
+  require `session-id`. A call without one is answered with how to get one.
+- For those clients a session now survives a reconnect, since it lives in the conversation and not in the connection.
+  After a server restart their old session is refused with instructions to create a new one, where it used to be
+  silently replaced by an empty one.
+- `Mcp-Session-Id` remains as a connection id. `DELETE` forgets the connection and no longer ends a session; sessions
+  end by a day of silence. A request without the header is served.
+- `:by`, on other sessions' entries and uploads, is the owner's whole session id.
+
 ## 0.9.0 - 2026-11-20
 
 - An agent can send a file to the JVM without the file passing through its context. The endpoint answers

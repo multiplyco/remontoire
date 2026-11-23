@@ -169,7 +169,7 @@
       (let [by-id (into {} (map (juxt :id identity)) (registry/evals))]
         (is (contains? by-id b) "another session's entries are labeled, never hidden")
         (is (nil? (:by (by-id a))))
-        (is (= (subs s2 0 8) (:by (by-id b))))
+        (is (= s2 (:by (by-id b))))
         (is (every? #(contains? % :status) (vals by-id)))))))
 
 

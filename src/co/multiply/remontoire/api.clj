@@ -22,8 +22,7 @@
 
 (defn- whoami
   "The caller's session id, read off the same dynamic rails output
-   attribution rides — a session must never bake its id into data, because
-   reconnects and client restarts mint fresh ones; it asks."
+   attribution rides."
   []
   (sc/ask session/*session* nil))
 
@@ -88,7 +87,7 @@
      :status Keyword  ; :running :done :failed :cancelled
      :peer   String
      :at     Inst
-     :by     String}  ; owner's id prefix — only on entries you didn't mint
+     :by     String}  ; owner's session id — only on entries you didn't mint
     …]"
   []
   (registry/evals))
@@ -303,7 +302,7 @@
      :path String  ; absolute, the JVM's own
      :size Long    ; bytes
      :at   Inst    ; last written
-     :by   String} ; owner's id prefix — only on files you didn't send
+     :by   String} ; owner's session id — only on files you didn't send
     …]"
   []
   (let [caller (whoami)]
@@ -311,7 +310,7 @@
       (mapcat (fn [[sid dir]]
                 (cond->> (upload/staged dir)
                   (not= sid caller)
-                  (map #(assoc % :by (subs sid 0 (min 8 (count sid))))))))
+                  (map #(assoc % :by sid)))))
       (sort-by (fn [[sid]] [(not= sid caller) sid]) (session/upload-dirs)))))
 
 

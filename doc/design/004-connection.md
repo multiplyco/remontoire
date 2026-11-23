@@ -128,9 +128,9 @@ eval(code, ns, await) → {:id :value :out :error :status}
   - Evaluation starts in a scratch namespace, so that a stray `def` lands somewhere disposable rather than in
     `clojure.core` — which is where an unbound `*ns*` resolves to at runtime, and therefore where an eval tool that
     does nothing about it will quietly define things.
-    - **Per session since 2026-08-05** (`session/scratch-ns-sym`): `co.multiply.remontoire.scratch.s<prefix>`, the
-      same 8-char sid prefix `:by` attribution wears, filtered to symbol-legal characters because an adopted sid is
-      client-chosen text (hashed whole when nothing survives). Two motivations, one fix: concurrent tenants in a
+    - **Per session since 2026-08-05** (`session/scratch-ns-sym`): `co.multiply.remontoire.scratch.s<handle>`, the
+      session handle `:by` attribution wears (until 2026-11-23 a filtered 8-char prefix of a transport-minted id;
+      §11). Two motivations, one fix: concurrent tenants in a
       shared scratch clobber each other's defs and rewire each other's refers; and the Quiescent skill's style
       teaching — `:refer` the `q`-prefixed macros bare — was in tension with visiting-namespace hygiene until each
       session owned a namespace where that style is simply correct. So scratch is minted pre-wired:
@@ -179,8 +179,8 @@ eval(code, ns, await) → {:id :value :out :error :status}
       the dunder is the collision-proof spelling of that act. Teachings swept back: the eval description, api
       docstrings, the manual, and the pattern namespaces — which again speak `q`, now truthfully "exactly as
       committed source does".
-    - **The scratch dies with its session** (`session/drop!`, so both the expiry reap and the DELETE goodbye reach
-      it): conversational state, same rule as the sticky namespace. An eval somehow still running there when its
+    - **The scratch dies with its session** (`session/drop!`, which the expiry reap reaches):
+      conversational state, same rule as the sticky namespace. An eval somehow still running there when its
       session expires fails loudly at its next form (`No namespace`) rather than working on in a ghost — accepted
       edge, visible not silent. The shared scratch is never removed.
     - **Scratch follows host reloads, 2026-10-01** (`rewire`). A reloader that unloads with `remove-ns` loads each

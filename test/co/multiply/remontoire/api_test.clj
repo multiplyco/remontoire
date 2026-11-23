@@ -28,7 +28,7 @@
 (deftest manual-follows-the-sessions-task-support
   ;; Recorded at create-session (§11); the variant markers never leak.
   (let [read-as (fn [tasks?]
-                  (let [sid (session/mint-handle!)]
+                  (let [sid (session/mint!)]
                     (session/client! sid {:tasks tasks?})
                     (binding [session/*session* sid]
                       (with-out-str (api/manual)))))

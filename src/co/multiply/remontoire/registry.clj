@@ -297,7 +297,7 @@
 (defn evals
   "One map per live entry, oldest first. The registry is shared — one JVM,
    one system, global ids — so everything is listed; entries another
-   session minted carry `:by`, the owner's id prefix (nil for a
+   session minted carry `:by`, the owner's session id (nil for a
    sessionless in-process caller — the wire always has a session).
    Attribution, not isolation (§11): what the caller didn't make
    is still labeled, never hidden. The caller's own session rides the same
@@ -307,5 +307,5 @@
     (mapv (fn [{:keys [id task peer at] owner :session}]
             (cond-> {:id id :status (status task) :peer peer :at at}
               (not= owner caller)
-              (assoc :by (some-> owner (subs 0 (min 8 (count owner)))))))
+              (assoc :by owner)))
       (vals (:entries @state)))))

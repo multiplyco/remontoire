@@ -29,34 +29,66 @@
              :clientInfo      {:name "test-suite" :version "0"}}})
 
 
+(defn- create-session!
+  "A session created over connection `cid`, as a legacy client does it."
+  [cid]
+  (second (re-find #"\"session-id\": \"([a-z]+)\""
+            (tu/text-of (tu/rpc! cid {:jsonrpc "2.0" :id 1 :method "tools/call"
+                                      :params  {:name "create-session" :arguments {}}})))))
+
+
 (deftest initialize-teaches-and-remembers-the-client
-  (let [sid  (session/mint!)
-        resp (tu/rpc! sid (init-message))]
+  (let [cid  (session/connect!)
+        resp (tu/rpc! cid (init-message))]
     (is (= 0 (:id resp)))
     (is (= "2025-03-26" (get-in resp [:result :protocolVersion]))
       "v0 echoes the proposed version")
     (is (map? (get-in resp [:result :serverInfo])))
     (is (string? (get-in resp [:result :instructions])))
-    (is (= "test-suite" (get-in (session/client sid) [:clientInfo :name])))))
+    (is (zero? (session/live-count)) "a handshake opens a connection, not a session")
+    (is (= "test-suite" (get-in (session/client (create-session! cid)) [:clientInfo :name]))
+      "a session created over the connection knows its client")))
+
+
+(deftest sessions-are-minted-by-a-tool-on-this-wire-too
+  (let [sid (create-session! nil)]
+    (is (session/live? sid) "no connection is needed to create one")
+    (is (str/includes? (tu/text-of (tu/call! sid "eval" {:code "1"})) (str "session " sid))
+      "the footer echoes the handle")))
+
+
+(deftest calls-without-a-live-session-are-refused-and-mint-nothing
+  (let [cid  (session/connect!)
+        call #(tu/rpc! cid {:jsonrpc "2.0" :id 1 :method "tools/call"
+                            :params  {:name "eval" :arguments %}})]
+    (is (tu/tool-error? (call {:code "1"})))
+    (is (tu/tool-error? (call {:code "1" :session-id "zzz"})))
+    (is (tu/tool-error? (call {:code "1" :session-id cid}))
+      "the connection's own id names no session")
+    (is (zero? (session/live-count)))))
 
 
 (deftest describe-weaves-into-the-instructions
   (mcp/configure! {:describe "the test rig"})
   (try
     (is (str/includes?
-          (get-in (tu/rpc! (session/mint!) (init-message))
+          (get-in (tu/rpc! (session/connect!) (init-message))
             [:result :instructions])
           "the test rig"))
     (finally (mcp/configure! {:describe nil}))))
 
 
 (deftest the-tool-table
-  (let [sid  (session/mint!)
-        resp (tu/rpc! sid {:jsonrpc "2.0" :id 1 :method "tools/list"})]
-    (is (= #{"eval" "await" "cancel"}
+  (let [cid  (session/connect!)
+        _    (is (true? (mcp/tools-changed? cid)) "nothing fetched yet")
+        resp (tu/rpc! cid {:jsonrpc "2.0" :id 1 :method "tools/list"})]
+    (is (= #{"create-session" "eval" "await" "cancel"}
            (into #{} (map :name) (get-in resp [:result :tools]))))
     (is (every? :inputSchema (get-in resp [:result :tools])))
-    (is (false? (mcp/tools-changed? sid))
+    (is (every? #(some #{"session-id"} (get-in % [:inputSchema :required]))
+          (remove #(= "create-session" (:name %)) (get-in resp [:result :tools])))
+      "every tool but the one that mints takes the session")
+    (is (false? (mcp/tools-changed? cid))
       "the fetch marker advances when the list is actually served")))
 
 
@@ -189,8 +221,8 @@
     ;; Dispatch without running the delivery mark — a response the client
     ;; never received, as after a request timeout.
     (mcp/handle-payload {:jsonrpc "2.0" :id 1 :method "tools/call"
-                         :params  {:name "eval" :arguments {:code "1"}}}
-      {:peer "test" :session sid})
+                         :params  {:name "eval" :arguments {:code "1" :session-id sid}}}
+      {:peer "test"})
     (is (str/includes? (tu/text-of (tu/call! sid "eval" {:code "2"}))
           "(__r/manual)")
       "an undelivered note burns nothing — the next response carries it")))
@@ -227,11 +259,11 @@
 
 
 (deftest protocol-refusals
-  (let [sid (session/mint!)]
-    (is (some? (:error (tu/rpc! sid {:jsonrpc "2.0" :id 1 :method "tools/call"
+  (let [cid (session/connect!)]
+    (is (some? (:error (tu/rpc! cid {:jsonrpc "2.0" :id 1 :method "tools/call"
                                      :params  {:name "nope" :arguments {}}}))))
-    (is (some? (:error (tu/rpc! sid {:jsonrpc "2.0" :id 2 :method "bogus/method"}))))
-    (is (nil? (tu/rpc! sid {:jsonrpc "2.0" :method "notifications/initialized"}))
+    (is (some? (:error (tu/rpc! cid {:jsonrpc "2.0" :id 2 :method "bogus/method"}))))
+    (is (nil? (tu/rpc! cid {:jsonrpc "2.0" :method "notifications/initialized"}))
       "notifications get no reply")))
 
 
@@ -239,6 +271,6 @@
   (let [resp (mcp/handle-payload
                [{:jsonrpc "2.0" :id 1 :method "ping"}
                 {:jsonrpc "2.0" :method "notifications/initialized"}]
-               {:session (session/mint!) :peer "test"})]
+               {:connection (session/connect!) :peer "test"})]
     (is (= 1 (count resp)))
     (is (= 1 (:id (first resp))))))
