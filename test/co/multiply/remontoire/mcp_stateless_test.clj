@@ -5,6 +5,7 @@
   (:require
     [clojure.string :as str]
     [clojure.test :refer [deftest is use-fixtures]]
+    [co.multiply.quiescent :as q]
     [co.multiply.remontoire.mcp :as mcp]
     [co.multiply.remontoire.registry :as registry]
     [co.multiply.remontoire.session :as session]
@@ -134,6 +135,29 @@
        (is (= "task" (get-in created [:result :resultType])))
        (is (< waited 5000) "answered without waiting out the grace")
        (rpc! "tasks/cancel" {:taskId task-id}))))
+
+
+(deftest background-on-a-call-that-declares-no-tasks-is-said-not-to-apply
+  ;; A client listed the tasks `eval`, calling it without the declaration:
+  ;; the one mismatch the server can see, since nobody else is listed
+  ;; `background`.
+  (let [sid     (create-session! false)
+        said?   #(str/includes? (tu/text-of %) "background")
+        running (call! "eval" {:code "(Thread/sleep 400) :late" :session-id sid :background true :await 50} false)
+        entry   (tu/id-of running)]
+    (is (nil? (get-in running [:result :taskId])) "no task for a call that declared none")
+    (is (said? running))
+    (is (str/includes? (tu/text-of running) (str "(__r/res " entry ")")) "and how to pick the result up")
+    (is (said? (call! "eval" {:code ":quick" :session-id sid :background true} false))
+      "also when there was nothing left to wait for")
+    (is (not (said? (call! "eval" {:code ":quick" :session-id sid} false)))
+      "a call that asked for nothing is told nothing")
+    (is (not (said? (call! "eval" {:code ":quick" :session-id sid :background false} false))))
+    @(q/await (registry/task entry) 5000))
+  (let [sid (create-session!)]
+    (is (not (str/includes? (str (tu/text-of (call! "eval" {:code ":quick" :session-id sid :background true})))
+               "background"))
+      "and a call that declared tasks got what it asked for")))
 
 
 (deftest tasks-cancel-is-real

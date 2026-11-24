@@ -293,6 +293,12 @@
     variant matching what the session declared. What a client is *sent* follows each request's own `_meta`: the
     tool list varies with the declaration on the `tools/list` request (which precedes any session), and whether a
     call answers with a task follows that call's declaration — an undeclared request never receives one.
+    The two can disagree: the 2026-07-28 revision does not hold a client to one declaration, and a headless
+    client was measured listing with the extension and calling without it (2026-11-23, logbook). The server
+    takes each request by itself, as the revision requires, and assumes a coherent client otherwise. One sign
+    of the mismatch is visible and is answered (2026-11-24): `background`, listed only to a declaring client,
+    arriving on a call that declares nothing. The response says it was not applied and how to wait or fetch
+    the result with `eval` alone. Nothing else gives the mismatch away, and nothing else is said.
   - *The principle: when the client follows tasks, trust its task machinery over Remontoire's own tools.* Waiting
     and cancelling are the harness's business — await all, wake on any, stop — so a declaring client is listed
     `create-session` and `eval` with `code`, `ns` and `background`: no `await` parameter, no `await` or `cancel` tool. Listed

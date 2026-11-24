@@ -30,6 +30,9 @@
 - A session whose upload directory cannot be read or deleted still ends, and what can be deleted of it is. The
   failure used to surface as an error on whichever eval's admission happened to reap the session, with that eval
   left running and unregistered.
+- An `eval` passed `background` on a call that does not declare the tasks extension says so in its response, with
+  how to wait for the result. The flag used to be dropped in silence. Only a client whose calls declare less than
+  its tool listing did can send it.
 
 ## 0.9.0 - 2026-11-20
 

@@ -400,6 +400,21 @@
      :pollIntervalMs task-poll-ms}))
 
 
+(defn- background-unapplied
+  "The line that tells a caller its `background` was not acted on, and
+   what it can do about entry `id` instead. `background` is listed only to
+   a client that declared the tasks extension, so one arriving on a call
+   that declares none is the one sign the server gets of a client holding
+   a list that does not match its calls. Nothing else gives that away, and
+   nothing else is said (§11)."
+  [id waited running?]
+  (str "\n;; background not applied — this call declared no task support, so it "
+    (if running?
+      (str "waited " waited " ms · pass `await` (ms) to wait longer, or eval (__r/res " id
+        ") to pick up the result")
+      "was answered inline")))
+
+
 (defn- eval-handler
   "Run, register, wait up to the bound, report. A client that follows MCP
    tasks waits the fixed `task-grace` instead of its own deadline — or not
@@ -418,15 +433,14 @@
                             :bank         bank
                             :peer         peer
                             :session      session
-                            :at           (java.util.Date.)})]
+                            :at           (java.util.Date.)})
+        wait (cond (and tasks? background) 0
+                   tasks?                  task-grace
+                   :else                   (deadline await await-ms))]
     ;; Point the transport's progress display at the bank before waiting, so
     ;; heartbeats can show the eval's latest output line while it runs (§4).
     (when display (reset! display bank))
-    (await-request task
-      (cond (and tasks? background) 0
-            tasks?                  task-grace
-            :else                   (deadline await await-ms))
-      request)
+    (await-request task wait request)
     (if (and tasks? (= :running (registry/status task)))
       (do
         ;; A task answer carries no text, so the admission's own losses
@@ -434,7 +448,13 @@
         (when (seq evicted) (session/note-evictions! session evicted))
         {::task      (assoc (task-state (registry/entry id)) :resultType "task")
          ::delivered #(registry/told! [id])})
-      (report (registry/entry id) {:session session :evicted evicted}))))
+      ;; Asked before the report is rendered: should the eval settle in
+      ;; between, the note errs toward saying how to fetch a result the
+      ;; report already shows.
+      (let [running? (= :running (registry/status task))]
+        (cond-> (report (registry/entry id) {:session session :evicted evicted})
+          (and background (not tasks?))
+          (update :text str (background-unapplied id wait running?)))))))
 
 
 (defn- await-handler
