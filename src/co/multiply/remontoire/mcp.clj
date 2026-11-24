@@ -959,9 +959,12 @@
 
 
 (defmethod handle "tools/list" [{:keys [id] ::keys [ctx]}]
-  (let [decls (declarations false)]
-    (some-> (:connection ctx) (session/fetched-tools! decls))
-    (result id {:tools decls})))
+  (let [decls      (declarations false)
+        connection (:connection ctx)]
+    ;; Counted as fetched once it has gone out (§5): a client whose list
+    ;; was lost on the way is still due the announcement.
+    (cond-> (result id {:tools decls})
+      connection (with-meta {::delivered #(session/fetched-tools! connection decls)}))))
 
 
 (defmethod handle "tools/call" [{:keys [id params] ::keys [ctx]}]

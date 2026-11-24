@@ -579,7 +579,8 @@
    cache is its own (§4): a lost announcement re-announces on the next
    stream."
   [cid decls]
-  (swap! connections assoc-in [cid :fetched-tools] decls)
+  (swap! connections
+    (fn [m] (cond-> m (contains? m cid) (assoc-in [cid :fetched-tools] decls))))
   nil)
 
 

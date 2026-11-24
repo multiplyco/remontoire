@@ -85,7 +85,9 @@
     (is (= [] (session/roster)) "and never appears on the roster")
     (session/disconnect! cid)
     (is (nil? (session/connection-client cid)))
-    (is (nil? (session/fetched-tools cid)))))
+    (is (nil? (session/fetched-tools cid)))
+    (session/fetched-tools! cid [:decls])
+    (is (nil? (session/fetched-tools cid)) "a list recorded late does not bring it back")))
 
 
 (deftest an-unknown-connection-is-adopted

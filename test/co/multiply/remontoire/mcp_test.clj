@@ -229,6 +229,20 @@
       "an undelivered note burns nothing — the next response carries it")))
 
 
+(deftest a-tool-list-counts-as-fetched-once-it-has-gone-out
+  (let [cid  (session/connect!)
+        resp (mcp/handle-payload {:jsonrpc "2.0" :id 1 :method "tools/list"} {:peer "test" :connection cid})]
+    (is (mcp/tools-changed? cid) "a list still on its way out has reached nobody")
+    ((::mcp/delivered (meta resp)))
+    (is (not (mcp/tools-changed? cid))))
+  ;; The client said goodbye while its list was on the way out.
+  (let [cid  (session/connect!)
+        resp (mcp/handle-payload {:jsonrpc "2.0" :id 1 :method "tools/list"} {:peer "test" :connection cid})]
+    (session/disconnect! cid)
+    ((::mcp/delivered (meta resp)))
+    (is (not (contains? @@#'session/connections cid)) "a late mark does not bring the connection back")))
+
+
 (deftest asking-how-an-entry-failed-delivers-only-a-failure
   (let [sid     (session/mint!)
         running (tu/id-of (tu/call! sid "eval" {:code "(q/sleep 60000)" :await 1}))

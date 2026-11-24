@@ -46,6 +46,8 @@
   only once it is stored.
 - An upload's receipt reports the size that upload wrote. With two uploads to one name overlapping, one could be
   answered with the other's size.
+- A `tools/list` response that fails to reach its client no longer stops `tools/list_changed` from being announced
+  to it.
 - An `eval` passed `background` on a call that does not declare the tasks extension says so in its response, with
   how to wait for the result. The flag used to be dropped in silence. Only a client whose calls declare less than
   its tool listing did can send it.
