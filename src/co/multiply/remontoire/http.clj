@@ -511,9 +511,12 @@
             (str "Larger than the " upload/max-bytes " byte limit\n"))
 
           :else
-          (let [stored (upload/store! sid name (HttpExchange/.getRequestBody exchange))]
-            (session/refresh! sid)
-            (respond! exchange 201 json-content-type (str (encode stored) "\n"))))))
+          ;; Heard from when the upload arrives and again when it is in:
+          ;; its bytes may be a while coming.
+          (do (session/refresh! sid)
+            (let [stored (upload/store! sid name (HttpExchange/.getRequestBody exchange))]
+              (session/refresh! sid)
+              (respond! exchange 201 json-content-type (str (encode stored) "\n")))))))
     (catch ExceptionInfo e
       (respond! exchange (:status (ex-data e) 500) "text/plain" (str (ex-message e) "\n")))
     (catch IOException e

@@ -434,6 +434,42 @@
       "nothing refused is left behind")))
 
 
+(deftest an-upload-is-not-staged-for-a-session-that-ended-under-it
+  ;; The session ends after the bytes are in and before they are moved
+  ;; into place.
+  (let [sid  (session/mint!)
+        dir  (session/upload-dir! sid)
+        copy @#'upload/copy!]
+    (with-redefs-fn {#'upload/copy! (fn [in part]
+                                      (let [n (copy in part)]
+                                        (session/drop! sid)
+                                        n))}
+      #(is (= 404 (HttpResponse/.statusCode (upload! sid "notes/late.edn" "{}")))))
+    (is (not (File/.exists (File. (str dir)))) "and nothing of it is left on disk")))
+
+
+(deftest an-upload-is-answered-with-what-it-put-there
+  ;; Not with a reading of the disk, where another upload under the same
+  ;; name may already have taken its place.
+  (let [sid (session/mint!)]
+    (with-redefs-fn {#'upload/entry (constantly {:name "another" :path "elsewhere" :size 600})}
+      #(is (= {:name "notes/a.edn" :size 6}
+              (select-keys (parsed (upload! sid "notes/a.edn" "{:n 1}")) [:name :size]))))))
+
+
+(deftest an-upload-is-heard-from-as-it-arrives
+  (let [sid     (session/mint!)
+        earlier (- (System/currentTimeMillis) 60000)
+        store!  upload/store!
+        seen    (atom nil)]
+    (swap! @#'session/state assoc-in [sid :last-seen] earlier)
+    (with-redefs-fn {#'upload/store! (fn [& args]
+                                       (reset! seen (get-in @@#'session/state [sid :last-seen]))
+                                       (apply store! args))}
+      #(is (= 201 (HttpResponse/.statusCode (upload! sid "a.edn" "{}")))))
+    (is (< earlier @seen) "before its bytes are taken")))
+
+
 (deftest uploads-die-with-the-session
   (let [sid  (create-session!)
         path (:path (parsed (upload! sid "a.edn" "{}")))]

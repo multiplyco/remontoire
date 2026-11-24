@@ -60,11 +60,17 @@
               (recur total))))))))
 
 
+(defn- file-name
+  "`file`'s name as its client gave it: its path beneath `dir`."
+  [^Path dir ^Path file]
+  (str/join "/" (map str (Path/.relativize dir file))))
+
+
 (defn- entry
   "One staged file as data, or nil when it vanished mid-listing."
   [^Path dir ^Path file]
   (try
-    {:name (str/join "/" (map str (Path/.relativize dir file)))
+    {:name (file-name dir file)
      :path (str file)
      :size (Files/size file)
      :at   (Date. (FileTime/.toMillis (Files/getLastModifiedTime file (make-array LinkOption 0))))}
@@ -87,6 +93,17 @@
     []))
 
 
+(defn- withdraw!
+  "Take back `file` and the directories left empty above it, up to and
+   including `dir`."
+  [^Path dir ^Path file]
+  (loop [path file]
+    (when (and path (Path/.startsWith path dir)
+            (try (Files/deleteIfExists path) true
+              (catch IOException _ false)))
+      (recur (Path/.getParent path)))))
+
+
 (defn store!
   "Stage the bytes of `in` as `name` in `sid`'s upload directory, replacing
    a file already staged under that name — re-sending an edited file is the
@@ -94,18 +111,30 @@
    listing or a load never sees half a file. Throws `ex-info` carrying an
    HTTP `:status` when refused.
 
+   A session can end while its bytes are still arriving, and its directory
+   goes with it. The file is then withdrawn and the upload refused: nothing
+   is staged for a session that is not there to list it.
+
    Output shape:
    {:name String, :path String, :size Long}"
   [sid ^String name ^InputStream in]
-  (let [dir  (or (session/upload-dir! sid)
-               (refuse 404 (str "No live session " (pr-str sid))))
+  (let [gone #(refuse 404 (str "No live session " (pr-str sid)))
+        dir  (or (session/upload-dir! sid) (gone))
         dest (or (target dir name)
                (refuse 400 (str "Not a usable file name: " (pr-str name))))
         part (Files/createTempFile (Path/.getParent dir) "part-" nil (make-array FileAttribute 0))]
     (try
-      (copy! in part)
-      (Files/createDirectories (Path/.getParent dest) (make-array FileAttribute 0))
-      (Files/move part dest (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE]))
-      (select-keys (entry dir dest) [:name :path :size])
+      (let [size (copy! in part)]
+        (Files/createDirectories (Path/.getParent dest) (make-array FileAttribute 0))
+        (Files/move part dest (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE]))
+        ;; Asked after the move, so that either this sees the session gone
+        ;; or the session's own cleanup, which follows its row, sees the
+        ;; file.
+        (when-not (= dir (session/upload-dir sid))
+          (withdraw! dir dest)
+          (gone))
+        ;; What this request put there, not what is there now: another
+        ;; upload under the same name may already have replaced it.
+        {:name (file-name dir dest) :path (str dest) :size size})
       (finally
         (Files/deleteIfExists part)))))
