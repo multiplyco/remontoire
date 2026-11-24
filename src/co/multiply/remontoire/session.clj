@@ -62,23 +62,49 @@
 
 
 (def ^:private handle-letters
-  "Consonants only, so a handle never spells a word: 20³ = 8000 handles."
+  "Consonants only, so a handle never spells a word: 20⁵ = 3.2 million
+   handles at five letters."
   "bcdfghjklmnpqrstvwxz")
 
 
+;; Every handle minted since the JVM started, live or not.
+(defonce ^:private minted (atom #{}))
+
+
+;; Held while a session's scratch is furnished and while a session's
+;; family is swept, so that the two never interleave.
+(defonce ^:private scratch-lock (Object.))
+
+
+(defn- handle-length
+  "How many letters the next handle gets, `used` having been minted: five,
+   and one more each time the length in use is half spent — which at five
+   is 1.6 million sessions in one JVM, so the rule is there for a draw to
+   always find a free handle, not because anyone will see it act."
+  [used]
+  (loop [n 5 room (long (Math/pow (count handle-letters) 5))]
+    (if (< (* 2 used) room) n (recur (inc n) (* room (count handle-letters))))))
+
+
 (defn mint!
-  "A fresh session (§11), born now, named by three random consonants the
-   model passes as an ordinary tool argument. Redrawn
-   against live sessions, so a collision is only ever with a handle from a
-   previous boot — and the space is sparse, so a typo or a stale handle
-   almost always names nothing and is refused loudly, where a counter's
-   dense space would land it silently in a neighbour."
+  "A fresh session (§11), born now, named by five random consonants that
+   the model passes as an ordinary tool argument. Redrawn against every
+   handle minted since the JVM started, not only the live ones: a handle
+   names one session, and what an ended session left running — an eval, a
+   task id in a client's hands — still speaks under it, so a second
+   session by the same name would be written to by the first's leftovers.
+   A collision is therefore only ever with a handle from a previous boot —
+   and the space is sparse, so a typo or a stale handle almost always
+   names nothing and is refused loudly, where a counter's dense space
+   would land it silently in a neighbour."
   []
   (loop []
-    (let [h        (apply str (repeatedly 3 #(rand-nth handle-letters)))
-          [before] (swap-vals! state
-                     (fn [m] (if (contains? m h) m (assoc-in m [h :last-seen] (now)))))]
-      (if (contains? before h) (recur) h))))
+    (let [h        (apply str (repeatedly (handle-length (count @minted)) #(rand-nth handle-letters)))
+          [before] (swap-vals! minted conj h)]
+      (if (contains? before h)
+        (recur)
+        (do (swap! state assoc-in [h :last-seen] (now))
+          h)))))
 
 
 (defn live?
@@ -161,6 +187,24 @@
       '[co.multiply.remontoire.registry :refer [res evals]]
       '[co.multiply.remontoire.api :as __r])
     *ns*))
+
+
+(defn furnish-for!
+  "`furnish-scratch!` for a namespace of `sid`'s scratch family — the
+   namespace, or nil, nothing created, when `sid` is not live. An eval
+   outlives a session that ends under it, and a scratch furnished for it
+   then would belong to nobody and never be reaped; furnishing and
+   `drop!`'s sweep exclude each other, so a scratch is either made before
+   the sweep and taken by it, or not made. The sessionless caller (nil)
+   has no session to end.
+
+   The namespace is returned for a reason: enter it as the object, never
+   again by name — `in-ns` creates what it does not find, and would put
+   back, bare, a scratch the sweep took in the meantime."
+  [sid ns-sym]
+  (locking scratch-lock
+    (when (or (nil? sid) (live? sid))
+      (furnish-scratch! ns-sym))))
 
 
 (defn scratch?
@@ -262,10 +306,12 @@
    than working on in a ghost. The sessionless in-process caller's shared
    scratch family is never removed — no session to die with."
   [sid]
-  (let [[before] (swap-vals! state dissoc sid)]
+  (let [[before] (locking scratch-lock
+                   (let [swapped (swap-vals! state dissoc sid)]
+                     (when (some? sid)
+                       (run! remove-ns (scratch-nses sid)))
+                     swapped))]
     (some-> (get-in before [sid :upload-dir]) delete-tree!))
-  (when (some? sid)
-    (run! remove-ns (scratch-nses sid)))
   nil)
 
 
@@ -298,7 +344,8 @@
    knowing which client and version a measurement was made against keeps
    the measurements honest."
   [sid m]
-  (swap! state assoc-in [sid :client] m)
+  (swap! state
+    (fn [state] (cond-> state (contains? state sid) (assoc-in [sid :client] m))))
   nil)
 
 
@@ -384,9 +431,13 @@
 
 (defn current-ns!
   "Where `sid`'s last eval ended — the sticky namespace is conversational
-   state, so it lives and dies with the session (§11)."
+   state, so it lives and dies with the session (§11). Guarded like
+   `note!`, and it matters most here: an eval outlives a session that is
+   released under it, and its ending must not write the session back — a
+   row is all it takes for a handle to be live."
   [sid ns-sym]
-  (swap! state assoc-in [sid :current-ns] ns-sym)
+  (swap! state
+    (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :current-ns] ns-sym))))
   nil)
 
 

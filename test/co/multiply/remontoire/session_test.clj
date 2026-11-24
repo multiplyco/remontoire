@@ -121,3 +121,77 @@
     (is (= [] (session/expired)) "a fresh session is live")
     (swap! @#'session/state assoc-in [sid :last-seen] 0)
     (is (= [sid] (session/expired)))))
+
+
+(deftest nothing-written-about-a-session-brings-it-back
+  ;; Every writer, called for a handle this server does not hold. Liveness
+  ;; is the presence of a row, so one unguarded write revives a session.
+  (let [gone "bcdfg"]
+    (session/refresh! gone)
+    (session/client! gone {:clientInfo {:name "late"}})
+    (session/note! gone "late")
+    (session/address! gone "http://late:1")
+    (session/manual-read! gone)
+    (session/nudged! gone)
+    (session/current-ns! gone 'clojure.string)
+    (session/note-evictions! gone [1])
+    (session/clear-evictions! gone [1])
+    (is (nil? (session/upload-dir! gone)))
+    (is (not (session/live? gone)))
+    (is (zero? (session/live-count)))))
+
+
+(defn- mint-drawing-first
+  [handle]
+  (let [chars (atom (seq handle))
+        draw  rand-nth]
+    (with-redefs [rand-nth (fn [letters]
+                             (let [[before] (swap-vals! chars next)]
+                               (or (first before) (draw letters))))]
+      (session/mint!))))
+
+
+(deftest a-handle-names-one-session-for-the-life-of-the-jvm
+  (let [old (session/mint!)]
+    (session/drop! old)
+    (let [fresh (mint-drawing-first old)]
+      (is (not= old fresh))
+      (is (not (session/live? old)))
+      (session/current-ns! old 'clojure.string)
+      (is (nil? (session/current-ns fresh)))))
+  ;; And a JVM that has spent half the handles of a length is not left
+  ;; drawing forever: the next ones are a letter longer.
+  (let [length @#'session/handle-length
+        spent  (quot (long (Math/pow 20 5)) 2)]
+    (is (= (count (session/mint!)) (length 0) (length (dec spent))))
+    (is (= (inc (length 0)) (length spent)))))
+
+
+(deftest a-scratch-is-not-left-behind-by-a-session-that-ends-as-it-is-furnished
+  (let [gone (session/mint!)
+        sub  (session/scratch-sub-ns-sym gone "late")]
+    (session/drop! gone)
+    (is (nil? (session/furnish-for! gone sub)))
+    (is (nil? (find-ns sub)) "refused, and nothing created"))
+  ;; A furnishing under way when the session ends: the end waits for it,
+  ;; and then takes what it made.
+  (let [sid     (session/mint!)
+        sub     (session/scratch-sub-ns-sym sid "midway")
+        inside  (promise)
+        proceed (promise)
+        furnish session/furnish-scratch!]
+    (with-redefs [session/furnish-scratch! (fn [ns-sym]
+                                             (deliver inside true)
+                                             (deref proceed 5000 nil)
+                                             (furnish ns-sym))]
+      (let [made  (future (session/furnish-for! sid sub))
+            _     (is (true? (deref inside 5000 false)))
+            ended (future (session/drop! sid))]
+        (is (= :waiting (deref ended 200 :waiting)) "the sweep does not run through a furnishing")
+        (deliver proceed true)
+        (is (some? (deref made 5000 nil)))
+        (is (nil? (deref ended 5000 :waiting)))))
+    (is (nil? (find-ns sub)))
+    (is (not (session/live? sid))))
+  (is (some? (session/furnish-for! nil (session/scratch-ns-sym nil)))
+    "the sessionless caller has no session to end"))

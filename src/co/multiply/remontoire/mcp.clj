@@ -40,21 +40,58 @@
 
 
 (defonce ^{:private true
-           :doc     "requestId → a thunk that cancels the work that request
-   started. An entry lives only while its handler runs;
-   `notifications/cancelled` looks its requestId up here."}
+           :doc     "Legacy connection and request id → the records of the requests in
+   flight under that pair, for a cancellation notice to find. A record is
+   there from before its request is dispatched until the response has been
+   written (`admit`, `dismiss`)."}
   in-flight
   (atom {}))
 
 
-(defonce ^{:private true
-           :doc     "requestIds the client explicitly cancelled while they ran.
-   Consulted once when the response is built: a cancelled request has no
-   reader by definition — the client keeps the socket open after aborting
-   (measured 2026-08-04), so no write can detect it — and its delivery
-   marks must be withheld so the outcome stays owed and announceable (§5)."}
-  client-cancelled
-  (atom #{}))
+(defn admit
+  "Give each request a cancellation record. Legacy connections also index
+   their records for notifications; a request without a connection keeps
+   its record to itself, where no notice can name it."
+  [{:keys [connection] :as ctx} payload]
+  (let [requests (into {}
+                   ;; One record per id. An id a batch uses twice gets one
+                   ;; that says so: it names no single request.
+                   (map (fn [[id n]] [id (atom (if (< 1 n) {:shared? true} {}))]))
+                   (frequencies
+                     (sequence (comp (filter map?) (keep :id))
+                       (if (sequential? payload) payload [payload]))))]
+    (when (and connection (seq requests))
+      (swap! in-flight
+        (fn [m]
+          (reduce-kv (fn [m id request]
+                       (update m [connection id] (fnil conj #{}) request))
+            m requests))))
+    (assoc ctx ::requests requests)))
+
+
+(defn dismiss
+  "Remove this admission's records from the connection's notification index."
+  [{:keys [connection] ::keys [requests]}]
+  (when (and connection (seq requests))
+    (swap! in-flight
+      (fn [m]
+        (reduce-kv (fn [m id request]
+                     (let [key  [connection id]
+                           left (disj (get m key) request)]
+                       (if (seq left) (assoc m key left) (dissoc m key))))
+          m requests))))
+  nil)
+
+
+(defn- admitted
+  "Call `f` with `ctx`, its requests on the books: as the transport
+   admitted them, or for the length of this call."
+  [ctx payload f]
+  (if (::requests ctx)
+    (f ctx)
+    (let [ctx (admit ctx payload)]
+      (try (f ctx)
+        (finally (dismiss ctx))))))
 
 
 (defn- clamp-await
@@ -73,38 +110,52 @@
   (if (some? requested) (clamp-await requested) default))
 
 
-(defn- cancellable-await
-  "Wait for `task` to settle, up to `ms`, with the wait on the books: while
-   it runs, `in-flight` maps `request-id` to a thunk cancelling `task`, so
-   an explicit client cancellation — TaskStop arrives as
-   `notifications/cancelled` naming the request — reaches the work directly
-   (§9). Only the explicit notice does that; a dead socket is an accident
-   and cancels nothing. The deref never throws: `q/await` shields."
-  [task ms request-id]
-  (when request-id
-    (swap! in-flight assoc request-id #(q/cancel task)))
-  (try
-    @(q/await task ms)
-    (finally
-      (when request-id (swap! in-flight dissoc request-id)))))
+(defn- await-request
+  "Wait for `task` to settle, up to `ms`, with a hook on `request` that
+   cancels it for as long as the wait runs. A cancellation recorded before
+   the wait began is acted on as it begins."
+  [task ms request]
+  (let [cancel #(q/cancel task)]
+    (when (:stop? (swap! request assoc :cancel cancel))
+      (cancel))
+    (try
+      @(q/await task ms)
+      (finally
+        (swap! request dissoc :cancel)))))
+
+
+(defn- stop-request!
+  [request]
+  (let [[before] (swap-vals! request assoc :stop? true :unread? true)]
+    (when-let [cancel (and (not (:stop? before)) (:cancel before))]
+      (cancel))))
 
 
 (defn- cancel-request!
-  "Act on an explicit cancellation: cancel what `request-id` started and
-   record that its response will have no reader. Unknown ids do nothing, so
-   the record cannot grow on strays."
-  [request-id]
-  (when-let [cancel! (get @in-flight request-id)]
-    (swap! client-cancelled conj request-id)
-    (cancel!)))
+  "Act on a cancellation notice: it names a request by the connection it
+   arrives on and the request's id. A pair that names one request stops
+   it. One that names several — the id in flight twice on the connection,
+   in two posts or in one batch — stops none of them, and leaves each
+   unread. A notice without a connection does nothing."
+  [{:keys [connection]} id]
+  (when connection
+    (let [requests (get @in-flight [connection id])]
+      (if (and (= 1 (count requests)) (not (:shared? @(first requests))))
+        (stop-request! (first requests))
+        (doseq [request requests]
+          (swap! request assoc :unread? true))))))
 
 
-(defn- aborted?
-  "Whether the client cancelled `request-id` while it ran. Consuming: the
-   record is read once, as the response is built, and dropped."
-  [request-id]
-  (let [[before] (swap-vals! client-cancelled disj request-id)]
-    (contains? before request-id)))
+(defn- answered
+  "Attach the delivery mark to a response with a reader. Check again when
+   the transport runs it because a notice can arrive during the write."
+  [response ctx id]
+  (let [request (get-in ctx [::requests id])
+        mark!   (::delivered (meta response))]
+    (cond
+      (nil? mark!) response
+      (:unread? @request) (vary-meta response dissoc ::delivered)
+      :else (vary-meta response assoc ::delivered #(when-not (:unread? @request) (mark!))))))
 
 
 (def ^:private value-length 128)
@@ -319,7 +370,7 @@
 
 
 (defn- task-id
-  "The MCP task id for entry `id` of session `sid`: `ujw-12`. The handle
+  "The MCP task id for entry `id` of session `sid`: `ujwkd-12`. The handle
    prefix keeps an id minted before a restart from naming a new boot's
    entry 12, which restarts at 1 (§11)."
   [sid id]
@@ -336,7 +387,7 @@
    it printed is the status — the heartbeat's display, carried over (§4) —
    under the registry id. Claude Code does not show the status to the model
    (measured 2026-11-03); the bridge to `res` it relies on is the task id's
-   own shape, `bfw-12` naming entry 12."
+   own shape, `bfwkm-12` naming entry 12."
   [{:keys [id bank at] owner :session}]
   (let [said (some->> (tee/text bank) str/split-lines (remove str/blank?) last)]
     {:taskId         (task-id owner id)
@@ -357,7 +408,7 @@
    with `tasks/get`, which delivers the response `report` renders. Once
    the task answer is out, the entry is told — the client announces its
    ending, so `;; settled` news never does (§11)."
-  [{:keys [code ns await background]} {:keys [peer display session tasks?] ::keys [request-id]}]
+  [{:keys [code ns await background]} {:keys [peer display session tasks?] ::keys [request]}]
   (let [{:keys [task details baseline bank]} (evaluate/evaluate code ns session)
         {:keys [id evicted]}
         (registry/capture! {:task         task
@@ -371,11 +422,11 @@
     ;; Point the transport's progress display at the bank before waiting, so
     ;; heartbeats can show the eval's latest output line while it runs (§4).
     (when display (reset! display bank))
-    (cancellable-await task
+    (await-request task
       (cond (and tasks? background) 0
             tasks?                  task-grace
             :else                   (deadline await await-ms))
-      request-id)
+      request)
     (if (and tasks? (= :running (registry/status task)))
       (do
         ;; A task answer carries no text, so the admission's own losses
@@ -395,7 +446,7 @@
    nothing here owns, cancels or reads anything — reporting a status is
    announcement, not delivery (§5), so settled ids are marked told, not
    touched, and only after the response goes out."
-  [{:keys [all-of any-of await]} {:keys [session] ::keys [request-id]}]
+  [{:keys [all-of any-of await]} {:keys [session] ::keys [request]}]
   (let [ms    (deadline await 0)
         alls  (mapv registry/task all-of)                   ; a bad id throws → :isError
         anys  (mapv registry/task any-of)
@@ -404,10 +455,10 @@
     (when (seq parts)
       ;; Cancelling an await means stop waiting, nothing more: the gate and
       ;; its shields die, every entry's compel moat stops the cascade from
-      ;; reaching the work, and `cancellable-await`'s own shield turns the
+      ;; reaching the work, and `await-request`'s own shield turns the
       ;; gate's death into an ordinary early return — statuses still get
       ;; reported.
-      (cancellable-await (q/task parts) ms request-id))
+      (await-request (q/task parts) ms request))
     (let [statuses (into (sorted-map)
                      (map (fn [id task] [id (registry/status task)])
                        (concat all-of any-of)
@@ -432,14 +483,14 @@
    stance. `:running` outlasted the grace period — `q/cancel` is prompt in
    a pure task tree but cooperative at a JVM leaf (§9), so the honest
    report is that it has not bitten yet."
-  [{:keys [ids await]} {:keys [session] ::keys [request-id]}]
+  [{:keys [ids await]} {:keys [session] ::keys [request]}]
   (let [ms    (deadline await await-ms)
         tasks (mapv registry/task ids)]                     ; a bad id throws → :isError
     (run! q/cancel tasks)
     (when (seq tasks)
       ;; The same shielded gate as `await`'s: each entry's death is a
       ;; completion, and cancelling this request just stops the waiting.
-      (cancellable-await (q/task (mapv #(q/await % ms) tasks)) ms request-id))
+      (await-request (q/task (mapv #(q/await % ms) tasks)) ms request))
     (let [statuses  (into (sorted-map) (map vector ids (map registry/status tasks)))
           fresh     (news ids session)
           cancelled (filterv #(= :cancelled (statuses %)) (keys statuses))
@@ -476,7 +527,7 @@
     "continues in the background as a task your client follows and "
     "delivers when it settles; pass `background` to skip the wait when "
     "the work is known to be long. The task id names the registry entry — task "
-    "`bfw-12` is `(__r/res 12)` — so follow-up work can be chained onto it "
+    "`bfwkm-12` is `(__r/res 12)` — so follow-up work can be chained onto it "
     "while it runs.\n\n"))
 
 
@@ -784,15 +835,14 @@
   [id tool-name arguments ctx]
   (if-let [{:keys [handler]} (by-name tool-name)]
     (try
-      (let [returned (handler arguments (assoc ctx ::request-id id))
+      (let [returned (handler arguments (assoc ctx ::request (get-in ctx [::requests id])))
             task     (when (map? returned) (::task returned))
             returned (cond-> returned (not task) (with-eviction-news (:session ctx)))
             response (result id (if task task (content returned)))]
         ;; As metadata, so it can never leak into the JSON: the transport
-        ;; calls it once the response is actually written (§5) — unless
-        ;; the client cancelled this request, in which case nobody reads
-        ;; what gets written and nothing may be marked.
-        (if-let [mark! (and (not (aborted? id)) (map? returned) (::delivered returned))]
+        ;; calls it once the response is actually written (§5). Whether
+        ;; the request was cancelled meanwhile is `answered`'s to ask.
+        (if-let [mark! (and (map? returned) (::delivered returned))]
           (with-meta response {::delivered mark!})
           response))
       (catch Throwable t
@@ -887,9 +937,9 @@
    nothing (§9)."
   [{:keys [id method params] :as message} ctx]
   (if (some? id)
-    (handle (assoc message ::ctx ctx))
+    (answered (handle (assoc message ::ctx ctx)) ctx id)
     (do (when (= "notifications/cancelled" method)
-          (cancel-request! (:requestId params)))
+          (cancel-request! ctx (:requestId params)))
       nil)))
 
 
@@ -899,9 +949,11 @@
    warrants a reply."
   ([payload] (handle-payload payload {}))
   ([payload ctx]
-   (if (sequential? payload)
-     (seq (into [] (keep #(handle-message % ctx)) payload))
-     (handle-message payload ctx))))
+   (admitted ctx payload
+     (fn [ctx]
+       (if (sequential? payload)
+         (seq (into [] (keep #(handle-message % ctx)) payload))
+         (handle-message payload ctx))))))
 
 
 ;; # The stateless wire (2026-07-28)
@@ -940,7 +992,7 @@
    the entry's owner: entry ids restart at 1 with the JVM, and a task id
    from before a restart must name nothing rather than a stranger's eval."
   [task-id]
-  (let [[_ sid n] (when (string? task-id) (re-matches #"([a-z]{3})-(\d+)" task-id))
+  (let [[_ sid n] (when (string? task-id) (re-matches #"([a-z]{5,})-(\d+)" task-id))
         entry     (when n
                     (try (registry/entry (parse-long n))
                       (catch clojure.lang.ExceptionInfo _ nil)))]
@@ -994,43 +1046,47 @@
     response))
 
 
-(defn handle-modern
-  "One stateless-wire message, already past the transport's header checks.
-   Returns the response, or nil for a notification."
+(defn- answer-modern
   [{:keys [id method params]} ctx]
   (let [client (declared-client (:_meta params))
         ;; Per request, so what the client receives always matches what
         ;; that request said.
         tasks? (:tasks client)
         ctx    (assoc ctx :tasks? tasks? :client client)]
-    (if (nil? id)
-      (do (when (= "notifications/cancelled" method)
-            (cancel-request! (:requestId params)))
-        nil)
-      (complete
-        (case method
-          "server/discover"
-          (result id {:supportedVersions (into [protocol-version] legacy-versions)
-                      :capabilities      {:tools {} :extensions {tasks-extension {}}}
-                      :instructions      (instructions)
-                      :ttlMs             300000
-                      :cacheScope        "public"})
+    (when (some? id)
+      (answered
+        (complete
+          (case method
+            "server/discover"
+            (result id {:supportedVersions (into [protocol-version] legacy-versions)
+                        :capabilities      {:tools {} :extensions {tasks-extension {}}}
+                        :instructions      (instructions)
+                        :ttlMs             300000
+                        :cacheScope        "public"})
 
-          "ping" (result id {})
+            "ping" (result id {})
 
-          ;; Varies with this request's declaration, hence private; short,
-          ;; because a reloaded tool table has no other way to reach a
-          ;; stateless client.
-          "tools/list" (result id {:tools      (declarations tasks?)
-                                   :ttlMs      60000
-                                   :cacheScope "private"})
+            ;; Varies with this request's declaration, hence private; short,
+            ;; because a reloaded tool table has no other way to reach a
+            ;; stateless client.
+            "tools/list" (result id {:tools      (declarations tasks?)
+                                     :ttlMs      60000
+                                     :cacheScope "private"})
 
-          "tools/call" (call-tool id params ctx)
+            "tools/call" (call-tool id params ctx)
 
-          ("tasks/get" "tasks/update" "tasks/cancel")
-          (if tasks?
-            (task-method id method params)
-            (error id -32021 "Missing required client capability"
-              {:requiredCapabilities {:extensions {tasks-extension {}}}}))
+            ("tasks/get" "tasks/update" "tasks/cancel")
+            (if tasks?
+              (task-method id method params)
+              (error id -32021 "Missing required client capability"
+                {:requiredCapabilities {:extensions {tasks-extension {}}}}))
 
-          (error id -32601 (str "Method not found: " method)))))))
+            (error id -32601 (str "Method not found: " method))))
+        ctx id))))
+
+
+(defn handle-modern
+  "One stateless-wire message, already past the transport's header checks.
+   Returns the response, or nil for a notification."
+  [message ctx]
+  (admitted ctx message #(answer-modern message %)))

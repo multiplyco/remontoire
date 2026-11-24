@@ -278,11 +278,17 @@
 
   - *`create-session`*, the first call, mints the handle every other tool requires; a call without one, or with
     one the server does not hold, is a tool error whose text teaches the incantation. Unknown handles are refused,
-    not adopted — a handle that outlives its session is the haunting the paragraph above names. The handle is
-    three random letters, redrawn against live sessions at mint: short to repeat per call, and sparse, which is
+    not adopted — a handle that outlives its session is the haunting the paragraph above names. Refusal rests on
+    one fact, that a session is live exactly while it has a row, so nothing may write about a session that is
+    not there (2026-11-23: an eval that outlived its session wrote where it ended, and the handle was live again
+    with nothing behind it; every writer is guarded now, and a scratch is furnished only for a live session, under
+    the lock its sweep runs under). The handle is five random letters (three until 2026-11-24), redrawn against every
+    handle minted since the JVM started, not only the live ones: what an
+    ended session left running still speaks under its handle, so a second session by that name would be written
+    to by the first's leftovers (2026-11-23). Short to repeat per call, and sparse, which is
     what an integer counter is not — in a dense space a typo or a pre-restart handle lands silently in a neighbour,
     in a sparse one it misses and fails loudly. Guessability is irrelevant (the tailnet is the lock). Every footer
-    echoes it. MCP task ids are the handle plus the entry id (`ujw-12`); entry ids stay integers for `res`.
+    echoes it. MCP task ids are the handle plus the entry id (`ujwkd-12`); entry ids stay integers for `res`.
   - *Capabilities are recorded at `create-session`* — for the teaching surface only: `(__r/manual)` serves the
     variant matching what the session declared. What a client is *sent* follows each request's own `_meta`: the
     tool list varies with the declaration on the `tools/list` request (which precedes any session), and whether a
@@ -342,3 +348,10 @@
 
   Tried the same day against the dev server with `curl` as a legacy client (logbook). Not yet driven by a real
   legacy client.
+
+  **Open: cancellation on the stateless wire (2026-11-24).** A stateless client has no way to cancel a held call.
+  The 2026-07-28 HTTP binding makes closing the response stream the cancellation signal and expects no notice, and
+  the client measured on 2026-11-23 does exactly that when it times out (logbook). Acting on a closed stream would
+  give that wire a cancellation that names its request exactly. It would also reverse §5's "accidents never do"
+  there: a timeout or a dropped connection closes the stream the same way, and work that today runs on and is
+  announced would be stopped instead. Undecided, and a change to make on its own if it is made.

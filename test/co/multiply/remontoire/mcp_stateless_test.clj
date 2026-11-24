@@ -54,7 +54,7 @@
   ([] (create-session! true))
   ([tasks?]
    (let [resp (call! "create-session" {} tasks?)]
-     (second (re-find #"\"session-id\": \"([a-z]{3})\"" (tu/text-of resp))))))
+     (second (re-find #"\"session-id\": \"([a-z]{5})\"" (tu/text-of resp))))))
 
 
 (defn- listed
@@ -83,7 +83,7 @@
 
 (deftest a-session-is-minted-and-recorded
   (let [sid (create-session!)]
-    (is (re-matches #"[a-z]{3}" sid))
+    (is (re-matches #"[a-z]{5}" sid))
     (is (session/live? sid))
     (is (true? (:tasks (session/client sid))) "capabilities recorded at birth")))
 
@@ -148,7 +148,7 @@
 (deftest task-ids-name-only-their-owners-entries
   (let [sid     (create-session!)
         task-id (get-in (call! "eval" {:code "(Thread/sleep 600)" :session-id sid}) [:result :taskId])
-        foreign (str/replace task-id #"^[a-z]{3}" (if (= "bbb" sid) "ccc" "bbb"))]
+        foreign (str/replace task-id #"^[a-z]+" (if (= "bbbbb" sid) "ccccc" "bbbbb"))]
     (is (= -32602 (get-in (rpc! "tasks/get" {:taskId foreign}) [:error :code])))
     (is (= -32602 (get-in (rpc! "tasks/get" {:taskId "nonsense"}) [:error :code])))))
 

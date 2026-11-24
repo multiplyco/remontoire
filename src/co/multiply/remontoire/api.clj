@@ -205,8 +205,15 @@
   "Furnish `ns-sym` and move there, announcing the move — the print rides
    the eval's own output capture, so the response says where you stand."
   [ns-sym]
-  (session/furnish-scratch! ns-sym)
-  (let [ns (in-ns ns-sym)]
+  ;; An eval can outlive its session — released under it, or expired while
+  ;; it ran on in a host namespace — and is then refused a scratch. Entered
+  ;; as the object furnished, not by name: `in-ns` would create it anew if
+  ;; the session ended in between.
+  (let [sid (whoami)
+        ns  (or (session/furnish-for! sid ns-sym)
+              (throw (ex-info (str "Session " (pr-str sid) " has ended, and its scratch with it")
+                       {:session sid})))]
+    (set! *ns* ns)
     (println (str "switched to scratch namespace " ns-sym))
     ns))
 

@@ -21,9 +21,13 @@
    unbound `*ns*` otherwise resolves to at runtime. Per session, so that
    concurrent tenants' defs and requires cannot collide. The wiring — and
    its idempotence — is `session/furnish-scratch!`'s, shared with the
-   named compartments `api/scratch!` mints."
+   named compartments `api/scratch!` mints.
+
+   Only for a session that is live: one released as its eval begins would
+   otherwise be left a scratch nobody reaps (`session/furnish-for!`)."
   [session]
-  (session/furnish-scratch! (session/scratch-ns-sym session)))
+  (or (session/furnish-for! session (session/scratch-ns-sym session))
+    (throw (ex-info (str "Session " (pr-str session) " has ended") {:session session}))))
 
 
 (defn- ensure-aliases!

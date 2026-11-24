@@ -324,8 +324,8 @@
    otherwise, 202 when only notifications came. Delivery marks land only
    after the write that carried them (§5). The sessions the calls name are
    the ones its heartbeats keep fresh, and the ones told how they were
-   addressed. `dispatch` takes what the transport adds to the context."
-  [exchange payload changed? dispatch]
+   addressed. `dispatch` takes the payload and its request context."
+  [exchange payload ctx changed? dispatch]
   (let [sids (named-sessions payload)]
     (run! #(note-address! exchange %) sids)
     ;; Heard from on arrival, not at its own call's turn: a batch's later
@@ -336,15 +336,27 @@
       ;; starts first — so the handler fills it in once the bank is minted.
       (let [display (atom nil)]
         (some-> (respond-sse! exchange (progress-token payload) sids changed? display
-                  #(dispatch {:display display}))
+                  #(dispatch payload (assoc ctx :display display)))
           (mark-delivered!)))
-      (if-let [response (dispatch {})]
+      (if-let [response (dispatch payload ctx)]
         (do (respond! exchange 200 json-content-type (encode response))
           ;; A client that timed out threw above instead, leaving its
           ;; entry owed, protected and announceable.
           (mark-delivered! response))
         ;; Notifications only: accepted, nothing to say back.
         (respond! exchange 202 nil nil)))))
+
+
+(defn- served
+  "Call `f` with `ctx` — who sent `payload` — while its requests are on
+   the books as in flight (§5): from before they are dispatched until
+   their response has been written, or the write has failed. The write is
+   inside on purpose: a request whose answer is still on its way out is
+   one a cancellation can name."
+  [ctx payload f]
+  (let [ctx (mcp/admit ctx payload)]
+    (try (f ctx)
+      (finally (mcp/dismiss ctx)))))
 
 
 (defn- serve-modern!
@@ -355,8 +367,8 @@
       (encode {:jsonrpc "2.0"
                :id      (when (map? payload) (:id payload))
                :error   {:code code :message message}}))
-    (answer! exchange payload nil
-      #(mcp/handle-modern payload (assoc % :peer peer)))))
+    (served {:peer peer} payload
+      #(answer! exchange payload % nil mcp/handle-modern))))
 
 
 (defn- serve-legacy!
@@ -364,8 +376,9 @@
    `initialize`, and is what a stale tool list is announced to."
   [exchange payload peer]
   (let [cid (connection! exchange payload)]
-    (answer! exchange payload (when cid #(mcp/tools-changed? cid))
-      #(mcp/handle-payload payload (assoc % :peer peer :connection cid)))))
+    (served {:peer peer :connection cid} payload
+      (fn [ctx]
+        (answer! exchange payload ctx (when cid #(mcp/tools-changed? cid)) mcp/handle-payload)))))
 
 
 (defn- serve!

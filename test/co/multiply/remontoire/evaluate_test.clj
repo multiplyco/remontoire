@@ -7,6 +7,7 @@
     [clojure.test :refer [deftest is use-fixtures]]
     [co.multiply.quiescent :as q]
     [co.multiply.remontoire.evaluate :as evaluate]
+    [co.multiply.remontoire.registry :as registry]
     [co.multiply.remontoire.session :as session]
     [co.multiply.remontoire.tee :as tee]
     [co.multiply.remontoire.test-util :as tu]))
@@ -214,3 +215,47 @@
   (let [{:keys [bank]} (run!! "@(future (println \"from-a-future\") :ok)"
                          (session/mint!))]
     (is (str/includes? (tee/text bank) "from-a-future"))))
+
+
+(deftest an-eval-that-outlives-its-session-does-not-bring-it-back
+  ;; In a host namespace, so that the scratch going with the session does
+  ;; not stop the eval at its next form.
+  (let [sid (session/mint!)
+        {:keys [task details]} (evaluate/evaluate "(Thread/sleep 150) :finished" "clojure.string" sid)]
+    ;; Under way: its namespace is resolved, its first form running.
+    (Thread/sleep 50)
+    (registry/release-session! sid)
+    @(q/await task 5000)
+    (is (= :finished @task) "the work is not the session's to stop")
+    (is (= 'clojure.string (:ns (deref details 1000 nil))))
+    (is (not (session/live? sid)) "and its ending writes nothing back: a row is all a live handle is")
+    (is (empty? (session/scratch-nses sid))))
+  (let [sid (session/mint!)
+        sub (session/scratch-sub-ns-sym sid "late")
+        {:keys [task]} (evaluate/evaluate
+                         "(Thread/sleep 150) (co.multiply.remontoire.api/scratch! \"late\")"
+                         "clojure.string" sid)]
+    (Thread/sleep 50)
+    (registry/release-session! sid)
+    @(q/await task 5000)
+    (is (q/exceptional? task) "a scratch asked for after the session ended is refused")
+    (is (nil? (find-ns sub)) "where it would have been furnished for nobody, and never reaped"))
+  ;; The session ending between a compartment's furnishing and the eval's
+  ;; entry into it: entered by name, it would be created a second time.
+  (let [sid     (session/mint!)
+        sub     (session/scratch-sub-ns-sym sid "midway")
+        furnish session/furnish-for!]
+    (with-redefs [session/furnish-for! (fn [s ns-sym]
+                                         (let [made (furnish s ns-sym)]
+                                           (when (= sub ns-sym) (registry/release-session! sid))
+                                           made))]
+      (let [{:keys [task]} (evaluate/evaluate "(co.multiply.remontoire.api/scratch! \"midway\")" "clojure.string" sid)]
+        @(q/await task 5000)))
+    (is (nil? (find-ns sub)) "the sweep took it, and entering it did not put it back")
+    (is (empty? (session/scratch-nses sid))))
+  (let [sid (session/mint!)]
+    (registry/release-session! sid)
+    (let [{:keys [task]} (evaluate/evaluate ":x" nil sid)]
+      @(q/await task 5000)
+      (is (q/exceptional? task) "an eval that begins for a session already gone does not run")
+      (is (empty? (session/scratch-nses sid)) "and leaves no scratch behind"))))

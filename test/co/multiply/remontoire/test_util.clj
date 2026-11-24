@@ -21,6 +21,7 @@
   []
   (reset! @#'registry/state {:next-id 1 :entries (sorted-map)})
   (reset! @#'session/state {})
+  (reset! @#'session/minted #{})
   (reset! @#'session/connections {}))
 
 

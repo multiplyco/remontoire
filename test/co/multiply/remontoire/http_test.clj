@@ -251,6 +251,57 @@
           ":cancelled"))))
 
 
+(deftest a-clients-cancellation-finds-its-own-request
+  ;; Two connections from one address, each with request 1 in flight —
+  ;; `call-body` numbers every call 1, as a client's first call is.
+  (let [sid     (create-session!)
+        mine    (initialize!)
+        theirs  (initialize!)
+        started (fn [cid ms] (future (call! cid sid "eval" {:code (str "(q/sleep " ms " :slept)") :await 10000})))
+        a       (started mine 20000)
+        b       (started theirs 600)
+        flying  #(count @@#'co.multiply.remontoire.mcp/in-flight)]
+    (is (loop [n 0] (cond (= 2 (flying)) true (< 200 n) false :else (do (Thread/sleep 10) (recur (inc n))))))
+    (is (= 202 (HttpResponse/.statusCode
+                 (send! {:jsonrpc "2.0" :method "notifications/cancelled" :params {:requestId 1}}
+                   {:cid mine}))))
+    (is (= :cancelled (registry/status (registry/task (id-of (deref a 3000 nil)))))
+      "the request on the connection that asked")
+    (is (str/starts-with? (text-of (deref b 5000 nil)) ":slept") "and not its namesake on another")
+    (is (zero? (flying)) "both off the books once answered")))
+
+
+(deftest a-cancellation-during-the-write-leaves-the-result-owed
+  ;; The handler held at the point of writing a finished eval's answer:
+  ;; the cancellation arrives then, and what goes out after it has no
+  ;; reader.
+  (let [sid     (create-session!)
+        cid     (initialize!)
+        writing (promise)
+        proceed (promise)
+        respond @#'co.multiply.remontoire.http/respond!]
+    (with-redefs-fn {#'co.multiply.remontoire.http/respond!
+                     (fn [exchange status content-type body]
+                       (when (and body (str/includes? body ":held-at-the-write"))
+                         (deliver writing true)
+                         (deref proceed 5000 nil))
+                       (respond exchange status content-type body))}
+      #(let [answer (future (call! cid sid "eval" {:code ":held-at-the-write"}))]
+         (is (true? (deref writing 5000 false)))
+         (is (= 202 (HttpResponse/.statusCode
+                      (send! {:jsonrpc "2.0" :method "notifications/cancelled" :params {:requestId 1}}
+                        {:cid cid}))))
+         (deliver proceed true)
+         (let [entry (id-of (deref answer 5000 nil))]
+           (is (some? entry))
+           (is (loop [n 0]
+                 (cond (zero? (count @@#'co.multiply.remontoire.mcp/in-flight)) true
+                       (< 200 n) false
+                       :else (do (Thread/sleep 10) (recur (inc n))))))
+           (is (nil? (:touched (registry/entry entry))) "not marked delivered")
+           (is (= [entry] (mapv :id (registry/owed sid))) "and still owed"))))))
+
+
 (deftest sse-streams-the-call
   (let [sid  (create-session!)
         resp (send! (call-body sid "eval" {:code "(* 6 7)"})
@@ -428,7 +479,7 @@
 
 (deftest stateless-sessions-are-minted-by-a-tool
   (let [created (parsed (modern! "tools/call" {:name "create-session" :arguments {}}))
-        sid     (second (re-find #"\"session-id\": \"([a-z]{3})\"" (text-of created)))
+        sid     (second (re-find #"\"session-id\": \"([a-z]{5})\"" (text-of created)))
         evald   (parsed (modern! "tools/call" {:name      "eval"
                                                :arguments {:code "(+ 40 2)" :session-id sid}}))]
     (is (some? sid))

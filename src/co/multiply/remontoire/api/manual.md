@@ -13,7 +13,7 @@ otherwise. That one property sets the frame of mind:
 - A long-running eval does not stall you. One still running after 10 s moves to the background as a task your client
   follows, and its result is delivered when it settles; keep working in the meantime. When you know from the start that
   the work is long — a polling loop, a soak — pass `background` and it is a task at once. The task id names the registry
-  entry — task `bfw-12` is `(__r/res 12)` — so you can compose on the work while it runs. Your client may track the
+  entry — task `bfwkm-12` is `(__r/res 12)` — so you can compose on the work while it runs. Your client may track the
   task under an id of its own as well; stopping it there cancels the eval, as `(q/cancel (__r/res 12))` does.
 <!-- end -->
 - Runaway work never costs you the REPL: cancel it by id. Concurrency is structured — tasks form a tree under their

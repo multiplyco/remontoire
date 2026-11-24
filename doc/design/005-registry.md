@@ -84,15 +84,26 @@ something this library has to re-expose.
     A timed-out client therefore leaves its eval owed, protected and announceable — the next call reports it.
   - **Explicit client cancellation propagates; accidents never do** (decided and measured 2026-08-04). TaskStop on a
     backgrounded call sends `notifications/cancelled` naming the requestId (measured; reason "AbortError"), and that
-    explicit notice is id-directed cancellation arriving over the wire: an in-flight table maps requestId → cancel
-    thunk — for `eval` it cancels the entry, direct cancellation piercing its own moat; for `await` only the gate,
-    whose dying shields are stopped at every entry's moat (verified in-process — the awaited runner survived, the
-    handler returned early with honest statuses). A dead socket, by contrast, cancels nothing. The same notice
+    explicit notice is id-directed cancellation arriving over the wire: each request in flight holds a cancel thunk
+    while it waits — for `eval` it cancels the entry, direct cancellation piercing its own moat; for `await` only the
+    gate, whose dying shields are stopped at every entry's moat (verified in-process — the awaited runner survived,
+    the handler returned early with honest statuses). A dead socket, by contrast, cancels nothing. The same notice
     suppresses the response's delivery marks: the client keeps the socket *open* after aborting (measured — a
     response written six minutes after TaskStop still "succeeded"), so no write can detect this abandonment; a
     cancelled request has no reader by definition, its marks are withheld, and the next contact announces the
     outcome (`;; settled — 125 cancelled`). An `: end` probe frame after the final SSE message covers the
     disconnects that *do* close the socket, where the reset fails the second write.
+  - **A notice names a request by its connection and its id** (2026-11-23, corrected 2026-11-24). Request ids are
+    per client and count from zero, so two clients routinely have the same one in flight, and up to 0.9.0 a notice
+    cancelled whatever waited under its id, whoever had sent it. A notice now acts only on requests made on the
+    connection it arrives on. One that arrives without a connection does nothing, to the work or to the delivery
+    marks: an address is shared by every client on a machine, and the stateless wire, which has no connection,
+    sends no notice (measured 2026-11-23, logbook). An id in flight twice on one connection, in two posts or in
+    one batch, names neither request: both run on, and both answers stay unread.
+  - **A request is in flight until its response is out** (2026-11-23). The transport keeps it on the books from
+    before dispatch until the write has returned. A notice that arrives before the wait begins is acted on as it
+    begins. One that arrives while the answer is rendered or written withholds the marks, which ask at the moment
+    they are run. One that arrives after the write changes nothing: the answer may have been read.
 - **Claude Code's request ceiling, measured 2026-08-04**: for HTTP MCP servers the binding limit is a **60 s
   per-request timer to the first response byte** (probe: a 65 s eval, client gave up at ~60 s; docs confirm). Raisable
   per server via `"timeout"` in `.mcp.json` or `MCP_TOOL_TIMEOUT` ≥ 60 s; progress notifications do *not* extend it;

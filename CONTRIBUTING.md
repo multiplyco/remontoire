@@ -9,6 +9,18 @@ checkout's source (`dev/co/multiply/remontoire/dev.clj`). The repo's `.mcp.json`
 so a session opened in the repo can drive the library it is changing. Requests reach the handlers through vars, so
 reloading a namespace takes effect without a restart.
 
+## A new version arrives in a fresh JVM
+
+A host gets a new Remontoire by updating the dependency and restarting. Old and new code never run in one JVM, so
+nothing carries state from one version to the next: no migrating the session table, the registry or the requests in
+flight, no handling of ids or shapes an earlier version produced, and no tests for either. A client may still hold a
+session id from before the restart, and the server refusing it is the whole of the compatibility story.
+
+Loading changed source into a running JVM is a development convenience, the one `bb dev` exists for, and state sits
+behind `defonce` so that it survives that. When a change alters the shape of that state, restart the dev JVM; don't
+write code to bridge the two shapes. A finding that begins "after a reload from the previous version" describes
+something that does not happen in a host.
+
 ## Tests and checks
 
 - `bb test` runs the suite (kaocha). `tests.edn` sets `:capture-output? false` deliberately: the suite installs the

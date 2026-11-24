@@ -12,6 +12,19 @@
 - `Mcp-Session-Id` remains as a connection id. `DELETE` forgets the connection and no longer ends a session; sessions
   end by a day of silence. A request without the header is served.
 - `:by`, on other sessions' entries and uploads, is the owner's whole session id.
+- A cancellation notice stops only a request made on the connection it arrives on. It used to stop whatever waited
+  under that request id, another client's request included. Changed with it: a notice from a client that sends no
+  `Mcp-Session-Id` now does nothing, and a request id in flight twice on one connection is no longer stopped by a
+  notice.
+- A cancellation that arrives while its request's answer is being written leaves the result unread, to be announced
+  on the next response. It used to be marked delivered.
+- A session that ends while one of its evals is still running stays ended. The eval's finish used to write the
+  session back, leaving its id live with nothing behind it. A scratch namespace such an eval asks for is refused,
+  where it used to be created and never removed.
+- A session id is not given out twice while the JVM runs, so nothing an ended session left running can reach a
+  later one.
+- Session ids are five letters, where they were three, and task ids are longer by the same two: `bfwkm-12`. Three
+  letters could not last a long-lived JVM once ids stopped being reused.
 
 ## 0.9.0 - 2026-11-20
 
