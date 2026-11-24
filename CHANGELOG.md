@@ -35,6 +35,9 @@
 - A session whose upload directory cannot be read or deleted still ends, and what can be deleted of it is. The
   failure used to surface as an error on whichever eval's admission happened to reap the session, with that eval
   left running and unregistered.
+- In a batch, each call's progress goes out under the progress token that call attached. It all went out under
+  the first token in the batch, and a later call's first output lines were cut by as much as the call before it
+  had printed.
 - An `eval` passed `background` on a call that does not declare the tasks extension says so in its response, with
   how to wait for the result. The flag used to be dropped in silence. Only a client whose calls declare less than
   its tool listing did can send it.

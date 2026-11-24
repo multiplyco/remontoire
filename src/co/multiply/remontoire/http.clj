@@ -185,21 +185,28 @@
    dropped between beats. Every session in `sids` is kept fresh by a beat:
    a batch's later calls wait behind its earlier ones on this one stream.
 
+   `display` is the call being waited on, as `mcp/call-tool` leaves it:
+   `:token`, the progress token that call attached, and `:bank`, its
+   eval's output once it has one. A beat goes out under that token and no
+   other, and a bank not read before is read from its start.
+
    With `probe?` — the stateless wire, where a closed stream is the
    client's cancellation (§5) — an idle poll also writes a quiet SSE
    comment, so a hangup is noticed at the next poll or two and not at the
    next beat: at 15 s a beat comes too late for a client that left inside
    the 10 s task grace (measured 2026-11-24). A beat that fails delivers
    `::gone`, and nothing more is written to the stream."
-  [send! done token sids display probe?]
+  [send! done sids display probe?]
   (Thread/startVirtualThread
     (fn []
-      (loop [n 1 cursor 0 polls 0 idle 0]
+      (loop [n 1 seen nil cursor 0 polls 0 idle 0]
         (when (= ::beat (deref done poll-ms ::beat))
           (let [polls' (inc polls)
                 secs   (quot (* polls' poll-ms) 1000)
                 idle'  (+ idle (long poll-ms))
-                [fresh total] (if-let [bank @display]
+                {:keys [token bank]} @display
+                cursor (if (identical? bank seen) cursor 0)
+                [fresh total] (if bank
                                 (tee/since bank cursor)
                                 ["" cursor])
                 said   (->> (str/split-lines fresh)
@@ -223,14 +230,14 @@
             (cond
               (seq said)
               (when (emit! (beat-frame token n (str said " · " secs " s")))
-                (recur (inc n) (long total) polls' 0))
+                (recur (inc n) bank (long total) polls' 0))
 
               (>= idle' heartbeat-ms)
               (when (emit! (beat-frame token n (str "evaluating · " secs " s")))
-                (recur (inc n) cursor polls' 0))
+                (recur (inc n) bank cursor polls' 0))
 
               (or (not probe?) (emit! ": hb\n\n"))
-              (recur n cursor polls' idle'))))))))
+              (recur n bank cursor polls' idle'))))))))
 
 
 (defn- respond-sse!
@@ -246,7 +253,7 @@
    gone out — the stateless wire gives one, since there a closed stream
    cancels its request (§5); the legacy wire gives none, and a hangup
    costs it only the delivery marks."
-  [exchange progress-token sids changed? display disconnect! compute]
+  [exchange sids changed? display disconnect! compute]
   (Headers/.set (HttpExchange/.getResponseHeaders exchange) "Content-Type" sse-content-type)
   ;; 0 = chunked: the stream stays open until the exchange closes.
   (HttpExchange/.sendResponseHeaders exchange 200 0)
@@ -256,7 +263,7 @@
                 (or (write-frame! out frame)
                   (do (when disconnect! (disconnect!)) false)))]
     (when (send! ": open\n\n")
-      (heartbeat! send! done progress-token sids display (some? disconnect!))
+      (heartbeat! send! done sids display (some? disconnect!))
       (let [response (try (compute) (finally (locking done (deliver done ::done))))]
         (when (and (= ::done @done)
                 ;; The one server-initiated notification this transport
@@ -280,14 +287,6 @@
                 ;; nothing.
                 (write-frame! out ": end\n\n"))
           response)))))
-
-
-(defn- progress-token
-  "The token the client attached to a request, when it did — only its
-   presence authorizes progress notifications (MCP spec)."
-  [payload]
-  (let [tok #(get-in % [:params :_meta :progressToken])]
-    (if (sequential? payload) (some tok payload) (tok payload))))
 
 
 (defn- respond!
@@ -356,11 +355,12 @@
     ;; calls wait behind its earlier ones, whose admissions sweep the silent.
     (run! session/refresh! sids)
     (if (and (accepts-sse? exchange) (wants-stream? payload))
-      ;; The display cell exists before the eval does — the heartbeat loop
-      ;; starts first — so the handler fills it in once the bank is minted.
+      ;; The display cell exists before any call does — the heartbeat loop
+      ;; starts first — so each call fills it in as it starts: its progress
+      ;; token, and its eval's bank once that is minted.
       (let [display     (atom nil)
             disconnect! (when (:stateless? ctx) (mcp/on-stream-close ctx (:id payload)))]
-        (some-> (respond-sse! exchange (progress-token payload) sids changed? display disconnect!
+        (some-> (respond-sse! exchange sids changed? display disconnect!
                   #(dispatch payload (assoc ctx :display display)))
           (mark-delivered!)))
       (if-let [response (dispatch payload ctx)]

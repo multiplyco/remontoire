@@ -461,7 +461,7 @@
                    :else                   (deadline await await-ms))]
     ;; Point the transport's progress display at the bank before waiting, so
     ;; heartbeats can show the eval's latest output line while it runs (§4).
-    (when display (reset! display bank))
+    (when display (swap! display assoc :bank bank))
     (await-request task wait request)
     (if (and tasks? (= :running (registry/status task)))
       (do
@@ -905,8 +905,14 @@
   "A `tools/call`, on either wire: `create-session` needs no session;
    every other tool requires a live one, named in its arguments, and an
    unknown handle is refused, never adopted (§11) — the refusal teaches
-   the incantation. Naming a session is also what keeps it fresh."
-  [id {tool-name :name :keys [arguments]} ctx]
+   the incantation. Naming a session is also what keeps it fresh.
+
+   A transport that narrates the wait gives a `:display` cell in `ctx`, and
+   each call takes it over as it starts: the progress token it attached,
+   and later the output bank of its eval. A batch's calls take turns on
+   one stream, and a beat must speak for the call being waited on."
+  [id {tool-name :name :keys [arguments] :as params} ctx]
+  (some-> (:display ctx) (reset! {:token (get-in params [:_meta :progressToken])}))
   (let [sid (:session-id arguments)]
     (cond
       (or (= "create-session" tool-name) (nil? (by-name tool-name)))

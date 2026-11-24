@@ -537,6 +537,43 @@
              "and each is told how it was addressed, not only the first"))))))
 
 
+(deftest a-batch-narrates-each-call-under-its-own-token
+  ;; Three evals on one stream, each printing a line: two attached a
+  ;; progress token and one did not.
+  (let [cid   (initialize!)
+        sid   (create-session! cid)
+        said  (fn [id line token]
+                (cond-> (assoc (call-body sid "eval" {:code (str "(println " (pr-str line) ") (Thread/sleep 150)")})
+                          :id id)
+                  token (assoc-in [:params :_meta :progressToken] token)))
+        batch [(said 1 "first-call-line" "one") (said 2 "second-call-line" "two") (said 3 "third-call-line" nil)]]
+    (with-redefs-fn {#'co.multiply.remontoire.http/poll-ms 10}
+      #(let [beats (->> (stream-messages (send! batch {:cid cid :accept "application/json, text/event-stream"}))
+                     (filter (fn [m] (and (map? m) (= "notifications/progress" (:method m)))))
+                     (map :params))
+             under (fn [token] (str/join "\n" (keep (fn [b] (when (= token (:progressToken b)) (:message b))) beats)))]
+         (is (re-find #"(?m)^first-call-line" (under "one")))
+         (is (re-find #"(?m)^second-call-line" (under "two")) "whole, from the start of its own output")
+         (is (not (str/includes? (under "one") "second-call")) "and not under the call before it")
+         (is (not-any? (fn [b] (str/includes? (:message b) "third-call")) beats)
+           "a call that attached no token is narrated under nobody else's")))))
+
+
+(deftest a-stateless-call-is-narrated-under-its-token
+  (let [sid  (session/mint!)
+        call (-> (call-body sid "eval" {:code "(println \"lone-call-line\") (Thread/sleep 150)"})
+               (assoc-in [:params :_meta] (assoc tasks-meta :progressToken "lone")))]
+    (with-redefs-fn {#'co.multiply.remontoire.http/poll-ms 10}
+      #(let [resp (send! call {:accept  "application/json, text/event-stream"
+                               :headers {"MCP-Protocol-Version" mcp/protocol-version
+                                         "Mcp-Method"           "tools/call"
+                                         "Mcp-Name"             "eval"}})]
+         (is (some (fn [m]
+                     (and (= "lone" (get-in m [:params :progressToken]))
+                       (str/starts-with? (str (get-in m [:params :message])) "lone-call-line")))
+               (stream-messages resp)))))))
+
+
 (def ^:private clock
   "The session clock, for a test that moves it."
   (atom 0))
