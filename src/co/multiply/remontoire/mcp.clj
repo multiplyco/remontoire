@@ -481,6 +481,25 @@
           (update :text str (background-unapplied id wait running?)))))))
 
 
+(defn- entry-statuses
+  [ids tasks]
+  (into (sorted-map) (map vector ids (map registry/status tasks))))
+
+
+(defn- status-reply
+  "Report the observed statuses and the session's other news. After the
+   write, mark every settled id reported here as told. Only the outcomes
+   named in `delivered-ids` also become eligible for eviction."
+  [session statuses delivered-ids]
+  (let [fresh   (news (keys statuses) session)
+        settled (for [[id status] statuses :when (not= :running status)] id)]
+    {:text       (str (pr-str statuses)
+                   (when (seq fresh) (str "\n" (news-line fresh))))
+     ::delivered (fn []
+                   (run! registry/touch! delivered-ids)
+                   (registry/told! (concat settled (map :id fresh))))}))
+
+
 (defn- await-handler
   "Block until every `all-of` entry has settled and — when `any-of` is
    non-empty — at least one `any-of` entry has, or until the deadline.
@@ -503,16 +522,8 @@
       ;; gate's death into an ordinary early return — statuses still get
       ;; reported.
       (await-request (q/task parts) ms request))
-    (let [statuses (into (sorted-map)
-                     (map (fn [id task] [id (registry/status task)])
-                       (concat all-of any-of)
-                       (concat alls anys)))
-          fresh    (news (keys statuses) session)
-          reported (-> (filterv #(not= :running (statuses %)) (keys statuses))
-                     (into (map :id) fresh))]
-      {:text       (str (pr-str statuses)
-                     (when (seq fresh) (str "\n" (news-line fresh))))
-       ::delivered #(registry/told! reported)})))
+    (let [statuses (entry-statuses (concat all-of any-of) (concat alls anys))]
+      (status-reply session statuses []))))
 
 
 (defn- cancel-handler
@@ -535,16 +546,9 @@
       ;; The same shielded gate as `await`'s: each entry's death is a
       ;; completion, and cancelling this request just stops the waiting.
       (await-request (q/task (mapv #(q/await % ms) tasks)) ms request))
-    (let [statuses  (into (sorted-map) (map vector ids (map registry/status tasks)))
-          fresh     (news ids session)
-          cancelled (filterv #(= :cancelled (statuses %)) (keys statuses))
-          reported  (-> (filterv #(not= :running (statuses %)) (keys statuses))
-                      (into (map :id) fresh))]
-      {:text       (str (pr-str statuses)
-                     (when (seq fresh) (str "\n" (news-line fresh))))
-       ::delivered (fn []
-                     (run! registry/touch! cancelled)
-                     (registry/told! reported))})))
+    (let [statuses  (entry-statuses ids tasks)
+          cancelled (for [[id status] statuses :when (= :cancelled status)] id)]
+      (status-reply session statuses cancelled))))
 
 
 (def ^:private eval-async-deadline
