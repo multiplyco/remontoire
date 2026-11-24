@@ -50,9 +50,11 @@ first-byte timer under plain JSON; with SSE open, a 115 s eval returned inline; 
 a background task and delivers the result asynchronously as a task notification — the call is never abandoned; with
 comment-only heartbeats both long probes died at exactly 300 s of "no response or progress"; with progress-message
 heartbeats, 10- and 15-minute evals completed end-to-end. Remaining bounds: the client's ~28 h wall-clock default and
-the 300 s idle timer the beats feed. A failed heartbeat write is also the only way the JDK server ever notices a
-hangup — detection by symptom, within a beat or two — and the final write failing is what withholds the delivery
-marks (§5).
+the 300 s idle timer the beats feed. A failed write is the only way the JDK server ever notices a hangup — detection by
+symptom — and the final write failing is what withholds the delivery marks (§5). On the stateless wire, where a
+hangup is the client's cancellation, an idle poll also writes a quiet SSE comment every second, so that one is
+noticed within the 10 s task grace and not at the first 15 s beat (measured 2026-11-24, logbook), and a write
+that fails before the result has been flushed cancels the request (§5).
 
 **The progress `message` field renders, verbatim** (measured 2026-08-04: Claude Code shows it under "Calling
 remontoire…", replacing the bare "Processing… n" it falls back to when only `progress` is sent, and updates it each

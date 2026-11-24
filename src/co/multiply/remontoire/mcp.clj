@@ -51,7 +51,8 @@
 (defn admit
   "Give each request a cancellation record. Legacy connections also index
    their records for notifications; a request without a connection keeps
-   its record to itself, where no notice can name it."
+   its record to itself, where no notice can name it — on the stateless
+   wire the request's own stream is what cancels it (`on-stream-close`)."
   [{:keys [connection] :as ctx} payload]
   (let [requests (into {}
                    ;; One record per id. An id a batch uses twice gets one
@@ -112,8 +113,12 @@
 
 (defn- await-request
   "Wait for `task` to settle, up to `ms`, with a hook on `request` that
-   cancels it for as long as the wait runs. A cancellation recorded before
-   the wait began is acted on as it begins."
+   cancels it. A cancellation recorded before the wait began is acted on
+   as it begins. The hook comes off when the wait ends — except for a
+   request whose stream cancels it (`on-stream-close`), which keeps it
+   until the response is out: the answer may be a task handle for work
+   still running, and a client that is gone before it could read the
+   handle has left that work with nobody to follow it."
   [task ms request]
   (let [cancel #(q/cancel task)]
     (when (:stop? (swap! request assoc :cancel cancel))
@@ -121,10 +126,13 @@
     (try
       @(q/await task ms)
       (finally
-        (swap! request dissoc :cancel)))))
+        (when-not (:stream? @request)
+          (swap! request dissoc :cancel))))))
 
 
 (defn- stop-request!
+  "Cancel what `request` waits on — now, or as its wait begins — and record
+   that its response has no reader. Once only."
   [request]
   (let [[before] (swap-vals! request assoc :stop? true :unread? true)]
     (when-let [cancel (and (not (:stop? before)) (:cancel before))]
@@ -144,6 +152,20 @@
         (stop-request! (first requests))
         (doseq [request requests]
           (swap! request assoc :unread? true))))))
+
+
+(defn on-stream-close
+  "Make request `id` of `ctx` one that its response stream cancels, and
+   return what the transport calls when a write to that stream fails
+   before the response has gone out. For the stateless wire, where a
+   client cancels by closing the stream and sends no notice (the
+   2026-07-28 HTTP binding; measured 2026-11-23) — so a timeout or a lost
+   connection cancels too, the server being unable to tell them from a
+   stop (§5)."
+  [ctx id]
+  (when-let [request (get-in ctx [::requests id])]
+    (swap! request assoc :stream? true)
+    #(stop-request! request)))
 
 
 (defn- answered

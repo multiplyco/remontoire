@@ -81,8 +81,10 @@ something this library has to re-expose.
     65 s probe outran the client's 60 s first-byte timer: the handler had already marked the entry delivered while the
     response died on a closed socket — the exact lost result the gate exists to prevent, back through a side door).
     The handler attaches the marking as response *metadata* (never serialized); http runs it after `respond!` returns.
-    A timed-out client therefore leaves its eval owed, protected and announceable — the next call reports it.
-  - **Explicit client cancellation propagates; accidents never do** (decided and measured 2026-08-04). TaskStop on a
+    A timed-out client therefore leaves its eval owed, protected and announceable — the next call reports it
+    (as cancelled, on the stateless wire: below).
+  - **Explicit client cancellation propagates; accidents never do** (decided and measured 2026-08-04; on the
+    stateless wire a closed stream is the explicit signal since 2026-11-24, below). TaskStop on a
     backgrounded call sends `notifications/cancelled` naming the requestId (measured; reason "AbortError"), and that
     explicit notice is id-directed cancellation arriving over the wire: each request in flight holds a cancel thunk
     while it waits — for `eval` it cancels the entry, direct cancellation piercing its own moat; for `await` only the
@@ -104,6 +106,16 @@ something this library has to re-expose.
     before dispatch until the write has returned. A notice that arrives before the wait begins is acted on as it
     begins. One that arrives while the answer is rendered or written withholds the marks, which ask at the moment
     they are run. One that arrives after the write changes nothing: the answer may have been read.
+  - **On the stateless wire the stream is the cancellation** (2026-11-24). That wire has no notice: the 2026-07-28
+    HTTP binding makes closing the response stream the signal, and the stream identifies its request exactly. The
+    first failed heartbeat or result write cancels that stream's request — the eval, or for `await` only the wait.
+    This is where "accidents never do" stops holding: a timeout or a dropped connection closes the stream like a
+    deliberate stop does, and the eval behind it is cancelled where it used to run on and be announced. A
+    successful flush of the final response hands running work to the client, so a task whose handle went out
+    outlives the stream and is stopped with `tasks/cancel`. A failure of the trailing probe after that withholds
+    the delivery marks and leaves the work running. A flush can succeed into a socket the client has just
+    closed, so the handoff is what the server observed, not what the client read.
+    [Streamable HTTP cancellation](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#cancellation)
 - **Claude Code's request ceiling, measured 2026-08-04**: for HTTP MCP servers the binding limit is a **60 s
   per-request timer to the first response byte** (probe: a 65 s eval, client gave up at ~60 s; docs confirm). Raisable
   per server via `"timeout"` in `.mcp.json` or `MCP_TOOL_TIMEOUT` ≥ 60 s; progress notifications do *not* extend it;

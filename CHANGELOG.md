@@ -16,6 +16,11 @@
   under that request id, another client's request included. Changed with it: a notice from a client that sends no
   `Mcp-Session-Id` now does nothing, and a request id in flight twice on one connection is no longer stopped by a
   notice.
+- **Behaviour change, 2026-07-28 clients:** closing a held response stream now cancels the eval behind it, or ends
+  the wait of an `await`. A client that timed out or lost its connection used to leave the eval running, its
+  outcome announced on the next call; the eval is now cancelled when a write to the stream fails, which is how the
+  server learns the stream is gone. Work whose task handle or `running` answer has already been sent is not
+  affected. Clients that open with `initialize` are not affected: for them a disconnect still cancels nothing.
 - A cancellation that arrives while its request's answer is being written leaves the result unread, to be announced
   on the next response. It used to be marked delivered.
 - A session that ends while one of its evals is still running stays ended. The eval's finish used to write the

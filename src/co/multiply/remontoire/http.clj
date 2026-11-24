@@ -138,14 +138,20 @@
     (boolean (if (sequential? payload) (some call? payload) (call? payload)))))
 
 
-(defn- write!
-  "Heartbeat and message share the stream; the lock keeps frames whole. The
-   flush matters twice over: chunked encoding buffers, and an unflushed
-   heartbeat neither feeds the client's idle timer nor detects a hangup."
-  [out ^String s]
-  (locking out
-    (OutputStream/.write out (String/.getBytes s StandardCharsets/UTF_8))
-    (OutputStream/.flush out)))
+(defn- write-frame!
+  "Write one SSE frame and say whether it went out: a failed write is the
+   only way the JDK server ever learns that the client hung up. The flush
+   matters twice over: chunked encoding buffers, and an unflushed heartbeat
+   neither feeds the client's idle timer nor detects a hangup. Frames stay
+   whole because one thread writes at a time — the heartbeat under
+   `done`'s lock and only while it is undelivered, the answering thread
+   only after delivering it under the same lock (`respond-sse!`)."
+  [out ^String frame]
+  (try
+    (OutputStream/.write out (String/.getBytes frame StandardCharsets/UTF_8))
+    (OutputStream/.flush out)
+    true
+    (catch IOException _ false)))
 
 
 (defn- beat-frame
@@ -168,7 +174,7 @@
 
 
 (defn- heartbeat!
-  "Two-speed narration on `out` until `done` delivers or a write fails.
+  "Two-speed narration on the stream until `done` delivers or a write fails.
    The loop polls the bank every `poll-ms` and beats the moment there is
    fresh output — every line since the last beat, untrimmed and all of
    them: the client renders the message verbatim and truncates its own
@@ -177,44 +183,54 @@
    elapsed-time beat each `heartbeat-ms` instead, feeding the client's idle
    timer. The cursor advances only on an emitted beat, so nothing is ever
    dropped between beats. Every session in `sids` is kept fresh by a beat:
-   a batch's later calls wait behind its earlier ones on this one stream."
-  [out done token sids display]
+   a batch's later calls wait behind its earlier ones on this one stream.
+
+   With `probe?` — the stateless wire, where a closed stream is the
+   client's cancellation (§5) — an idle poll also writes a quiet SSE
+   comment, so a hangup is noticed at the next poll or two and not at the
+   next beat: at 15 s a beat comes too late for a client that left inside
+   the 10 s task grace (measured 2026-11-24). A beat that fails delivers
+   `::gone`, and nothing more is written to the stream."
+  [send! done token sids display probe?]
   (Thread/startVirtualThread
     (fn []
       (loop [n 1 cursor 0 polls 0 idle 0]
         (when (= ::beat (deref done poll-ms ::beat))
           (let [polls' (inc polls)
                 secs   (quot (* polls' poll-ms) 1000)
+                idle'  (+ idle (long poll-ms))
                 [fresh total] (if-let [bank @display]
                                 (tee/since bank cursor)
                                 ["" cursor])
                 said   (->> (str/split-lines fresh)
                          (remove str/blank?)
                          (str/join "\n"))
-                emit!  (fn [message]
-                         (try
-                           (write! out (beat-frame token n message))
-                           ;; A successful write is proof the client
-                           ;; is still there: open streams are
-                           ;; liveness (§11), so a session mid-await
-                           ;; can never expire under its own wait.
-                           ;; Guarded: a sid is a tool argument,
-                           ;; and a beat must never mint the session
-                           ;; a refused handle names.
-                           (run! session/refresh! sids)
-                           true
-                           (catch IOException _ false)))]
+                emit!  (fn [frame]
+                         ;; Under the lock, and only while `done` is
+                         ;; undelivered: a beat in progress finishes before
+                         ;; the answer is written, and none starts after.
+                         (locking done
+                           (when-not (realized? done)
+                             (if (send! frame)
+                               ;; A successful write is proof the client is
+                               ;; still there: open streams are liveness
+                               ;; (§11), so a session mid-await can never
+                               ;; expire under its own wait. Guarded: a sid
+                               ;; is a tool argument, and a beat must never
+                               ;; mint the session a refused handle names.
+                               (do (run! session/refresh! sids) true)
+                               (do (deliver done ::gone) false)))))]
             (cond
               (seq said)
-              (when (emit! (str said " · " secs " s"))
-                (recur (inc n) total polls' 0))
+              (when (emit! (beat-frame token n (str said " · " secs " s")))
+                (recur (inc n) (long total) polls' 0))
 
-              (>= (+ idle poll-ms) heartbeat-ms)
-              (when (emit! (str "evaluating · " secs " s"))
+              (>= idle' heartbeat-ms)
+              (when (emit! (beat-frame token n (str "evaluating · " secs " s")))
                 (recur (inc n) cursor polls' 0))
 
-              :else
-              (recur n cursor polls' (+ idle poll-ms)))))))))
+              (or (not probe?) (emit! ": hb\n\n"))
+              (recur n cursor polls' idle'))))))))
 
 
 (defn- respond-sse!
@@ -225,37 +241,45 @@
    Returns the response when its write went out, nil when the client was
    gone — the caller marks delivery only on the former. `changed?`, when
    given, is asked whether the client's tool list is stale; the stateless
-   wire gives none, having `ttlMs` on the list itself."
-  [exchange progress-token sids changed? display compute]
+   wire gives none, having `ttlMs` on the list itself. `disconnect!`, when
+   given, is called on the first write that fails before the response has
+   gone out — the stateless wire gives one, since there a closed stream
+   cancels its request (§5); the legacy wire gives none, and a hangup
+   costs it only the delivery marks."
+  [exchange progress-token sids changed? display disconnect! compute]
   (Headers/.set (HttpExchange/.getResponseHeaders exchange) "Content-Type" sse-content-type)
   ;; 0 = chunked: the stream stays open until the exchange closes.
   (HttpExchange/.sendResponseHeaders exchange 200 0)
-  (let [out  (HttpExchange/.getResponseBody exchange)
-        done (promise)]
-    (write! out ": open\n\n")
-    (heartbeat! out done progress-token sids display)
-    (let [response (try (compute) (finally (deliver done ::done)))]
-      (try
-        ;; The one server-initiated notification this transport speaks, and
-        ;; it rides a stream already open rather than a GET channel it does
-        ;; not offer (§4): told the tool set moved, the client re-fetches
-        ;; promptly (measured 2026-08-04). Announced ahead of the response
-        ;; and re-announced each stream until a `tools/list` actually lands
-        ;; — losing one costs nothing.
-        (when (and changed? (changed?))
-          (write! out (str "data: "
-                        (encode {:jsonrpc "2.0"
-                                 :method  "notifications/tools/list_changed"})
-                        "\n\n")))
-        (write! out (str "data: " (encode response) "\n\n"))
-        ;; One more frame after the message: a final write can slip into
-        ;; the send buffer of a socket the client already abandoned, and
-        ;; marking on it burned an announcement once (measured 2026-08-04).
-        ;; The probe draws the reset; delivery counts only if both writes
-        ;; survive.
-        (write! out ": end\n\n")
-        response
-        (catch IOException _ nil)))))
+  (let [out   (HttpExchange/.getResponseBody exchange)
+        done  (promise)
+        send! (fn [frame]
+                (or (write-frame! out frame)
+                  (do (when disconnect! (disconnect!)) false)))]
+    (when (send! ": open\n\n")
+      (heartbeat! send! done progress-token sids display (some? disconnect!))
+      (let [response (try (compute) (finally (locking done (deliver done ::done))))]
+        (when (and (= ::done @done)
+                ;; The one server-initiated notification this transport
+                ;; speaks, and it rides a stream already open rather than a
+                ;; GET channel it does not offer (§4): told the tool set
+                ;; moved, the client re-fetches promptly (measured
+                ;; 2026-08-04). Announced ahead of the response and
+                ;; re-announced each stream until a `tools/list` actually
+                ;; lands — losing one costs nothing.
+                (or (nil? changed?) (not (changed?))
+                  (send! (str "data: " (encode {:jsonrpc "2.0" :method "notifications/tools/list_changed"}) "\n\n")))
+                (send! (str "data: " (encode response) "\n\n"))
+                ;; One more frame after the message: a final write can slip
+                ;; into the send buffer of a socket the client already
+                ;; abandoned, and marking on it burned an announcement once
+                ;; (measured 2026-08-04). The probe draws the reset;
+                ;; delivery counts only if both writes survive. Not through
+                ;; `send!`: the flushed response has handed running work to
+                ;; the client, who commonly hangs up the moment it has read
+                ;; it, so a probe that fails withholds the marks and cancels
+                ;; nothing.
+                (write-frame! out ": end\n\n"))
+          response)))))
 
 
 (defn- progress-token
@@ -334,8 +358,9 @@
     (if (and (accepts-sse? exchange) (wants-stream? payload))
       ;; The display cell exists before the eval does — the heartbeat loop
       ;; starts first — so the handler fills it in once the bank is minted.
-      (let [display (atom nil)]
-        (some-> (respond-sse! exchange (progress-token payload) sids changed? display
+      (let [display     (atom nil)
+            disconnect! (when (:stateless? ctx) (mcp/on-stream-close ctx (:id payload)))]
+        (some-> (respond-sse! exchange (progress-token payload) sids changed? display disconnect!
                   #(dispatch payload (assoc ctx :display display)))
           (mark-delivered!)))
       (if-let [response (dispatch payload ctx)]
@@ -367,7 +392,7 @@
       (encode {:jsonrpc "2.0"
                :id      (when (map? payload) (:id payload))
                :error   {:code code :message message}}))
-    (served {:peer peer} payload
+    (served {:peer peer :stateless? true} payload
       #(answer! exchange payload % nil mcp/handle-modern))))
 
 

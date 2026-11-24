@@ -10,13 +10,15 @@
     [clojure.test :refer [deftest is use-fixtures]]
     [co.multiply.quiescent :as q]
     [co.multiply.remontoire :as remontoire]
+    [co.multiply.remontoire.http :as http]
+    [co.multiply.remontoire.mcp :as mcp]
     [co.multiply.remontoire.registry :as registry]
     [co.multiply.remontoire.session :as session]
     [co.multiply.remontoire.test-util :as tu]
     [co.multiply.remontoire.upload :as upload])
   (:import
     [com.sun.net.httpserver HttpServer]
-    [java.io File]
+    [java.io File InputStream]
     [java.net InetSocketAddress URI]
     [java.net.http HttpClient HttpHeaders HttpRequest HttpRequest$Builder
      HttpRequest$BodyPublishers HttpResponse HttpResponse$BodyHandlers]
@@ -557,3 +559,69 @@
            (is (session/live? waiting))
            (is (= [false false false] (mapv (comp boolean :isError :result) answers))
              "and its call is served"))))))
+
+
+(defn- streamed-eval
+  [sid]
+  (build (assoc-in (call-body sid "eval" {:code "(q/sleep 60000)"}) [:params :_meta] tasks-meta)
+    {:accept  "application/json, text/event-stream"
+     :headers {"MCP-Protocol-Version" mcp/protocol-version "Mcp-Method" "tools/call" "Mcp-Name" "eval"}}))
+
+
+(defn- session-entry
+  [sid]
+  (some #(when (= sid (:by %)) %) (registry/evals)))
+
+
+(defn- wait-until
+  [f]
+  (loop [attempt 0]
+    (or (f) (when (< attempt 500) (Thread/sleep 10) (recur (inc attempt))))))
+
+
+(deftest closing-one-stateless-stream-cancels-only-its-eval
+  (let [a (session/mint!)
+        b (session/mint!)
+        open-stream (fn [sid]
+                      (HttpResponse/.body (HttpClient/.send client (streamed-eval sid)
+                                            (HttpResponse$BodyHandlers/ofInputStream))))]
+    (with-redefs-fn {#'http/poll-ms 20}
+      (fn []
+        (with-open [^InputStream other (open-stream b)]
+          (with-open [^InputStream first-stream (open-stream a)]
+            (is (wait-until #(and (session-entry a) (session-entry b)))))
+          (is (wait-until #(= :cancelled (:status (session-entry a)))))
+          (is (= :running (:status (session-entry b))) "same peer and same JSON-RPC id"))
+        (is (wait-until #(= :cancelled (:status (session-entry b)))))))))
+
+
+(deftest the-final-sse-response-hands-off-running-work
+  ;; No heartbeat during the grace period. The first observed failure can
+  ;; be the response carrying the task id, or the probe after that response.
+  (doseq [[modern? fail-probe? expected] [[true false :cancelled]
+                                          [true true :running]
+                                          [false false :running]]]
+    (let [sid   (session/mint!)
+          write @#'http/write-frame!
+          failed (promise)
+          req    (if modern?
+                   (streamed-eval sid)
+                   (build (call-body sid "eval" {:code "(q/sleep 60000)" :await 30})
+                     {:accept "text/event-stream"}))]
+      (try
+        (with-redefs-fn {#'mcp/task-grace 30
+                         #'http/write-frame! (fn [out frame]
+                                               (if (if fail-probe?
+                                                     (= ": end\n\n" frame)
+                                                     (str/starts-with? frame "data: "))
+                                                 (do (deliver failed true) false)
+                                                 (write out frame)))}
+          (fn []
+            (let [response (HttpClient/.send client req (HttpResponse$BodyHandlers/ofString))]
+              (is (realized? failed))
+              (when fail-probe?
+                (is (some? (get-in (first (stream-messages response)) [:result :taskId]))))
+              (is (= expected (:status (session-entry sid)))))))
+        (finally
+          (when-let [entry (session-entry sid)]
+            (q/cancel (registry/task (:id entry)))))))))

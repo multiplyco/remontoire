@@ -16,6 +16,9 @@ otherwise. That one property sets the frame of mind:
   entry — task `bfwkm-12` is `(__r/res 12)` — so you can compose on the work while it runs. Your client may track the
   task under an id of its own as well; stopping it there cancels the eval, as `(q/cancel (__r/res 12))` does.
 <!-- end -->
+- A call your client gives up on before it has answered — a timeout, an interrupt — may take its eval with it. Don't
+  count on work whose call never returned: `(__r/evals)` says what is there. Once a call has answered, with a value,
+  `running` or a task, the work is in the registry and runs on whatever becomes of the connection.
 - Runaway work never costs you the REPL: cancel it by id. Concurrency is structured — tasks form a tree under their
   eval, and cancellation cascades through everything the work spawned — so patterns an ordinary REPL forbids are
   routine here: a polling loop with `Thread/sleep` in the body is fine, because you can always cancel it later.

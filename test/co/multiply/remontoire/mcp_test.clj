@@ -426,3 +426,21 @@
       (mcp/dismiss ctx)
       (is (= :cancelled (registry/status (registry/task (tu/id-of response)))))
       (is (nil? (::mcp/delivered (meta response)))))))
+
+
+(deftest disconnecting-an-await-only-ends-the-wait
+  (let [sid     (session/mint!)
+        id      (tu/id-of (tu/call! sid "eval" {:code "(q/sleep 60000)" :await 0}))
+        message {:id 9 :method "tools/call"
+                 :params {:name "await" :arguments {:session-id sid :all-of [id] :await 60000}}}
+        ctx     (mcp/admit nobody message)
+        close!  (mcp/on-stream-close ctx 9)]
+    (try
+      ;; The first failed beat can precede installation of the wait hook.
+      (close!)
+      (let [answer (future (mcp/handle-modern message ctx))]
+        (is (map? (deref answer 3000 nil)))
+        (is (= :running (registry/status (registry/task id)))))
+      (finally
+        (q/cancel (registry/task id))
+        (mcp/dismiss ctx)))))

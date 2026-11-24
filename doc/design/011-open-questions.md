@@ -355,9 +355,11 @@
   Tried the same day against the dev server with `curl` as a legacy client (logbook). Not yet driven by a real
   legacy client.
 
-  **Open: cancellation on the stateless wire (2026-11-24).** A stateless client has no way to cancel a held call.
-  The 2026-07-28 HTTP binding makes closing the response stream the cancellation signal and expects no notice, and
-  the client measured on 2026-11-23 does exactly that when it times out (logbook). Acting on a closed stream would
-  give that wire a cancellation that names its request exactly. It would also reverse §5's "accidents never do"
-  there: a timeout or a dropped connection closes the stream the same way, and work that today runs on and is
-  announced would be stopped instead. Undecided, and a change to make on its own if it is made.
+  **Stateless stream cancellation (resolved 2026-11-24).** A failed write on a held SSE stream cancels the
+  request that owns it. The 2026-11-23 headless-client trial observed exactly this signal on timeout. The
+  2026-07-28 binding requires the server to recognize it. A delivered task has its own lifetime and can be stopped
+  with `tasks/cancel`. A failed trailing probe leaves its result unread. The cost is §5's: on that wire a timeout
+  or a dropped connection now stops the work behind it. Taken anyway: an eval whose client dropped the call
+  before it was answered is accounted for by nobody — no one holds its id or waits for it — and of the two ways
+  to be wrong about why the stream closed, stopping the work is the safer. Tried with a headless client timing
+  out (logbook); a client's own stop was not. See §5.
