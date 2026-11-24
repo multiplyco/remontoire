@@ -82,14 +82,13 @@
   nil)
 
 
-(defn release-session!
-  "A session ended — expired by silence, or said goodbye with the spec's
-   DELETE. Its delivery claims lapse: every entry it owns is marked
-   delivered and told, so the eviction shield lifts and the entries join
-   the LRU pool — still `res`-able by anyone until capacity pressure
-   claims them. Death degrades; it does not delete (§11). Running entries
-   are marked too: not evictable until they settle, but the moment they
-   do, their reader being gone, they owe nobody anything."
+(defn- lapse-claims!
+  "The delivery claims of a session that has ended lapse: every entry it
+   owns is marked delivered and told, so the eviction shield lifts and the
+   entries join the LRU pool — still `res`-able by anyone until capacity
+   pressure claims them. Death degrades; it does not delete (§11). Running
+   entries are marked too: not evictable until they settle, but the moment
+   they do, their reader being gone, they owe nobody anything."
   [sid]
   (let [ids (into []
               (keep (fn [[id entry]] (when (= sid (:session entry)) id)))
@@ -100,8 +99,28 @@
                   (if (get-in state [:entries id])
                     (-> state (touch id) (assoc-in [:entries id :announced] true))
                     state))
-          state ids))))
+          state ids)))
+    nil))
+
+
+(defn release-session!
+  "End session `sid` now: its claims lapse (`lapse-claims!`) and it is
+   dropped."
+  [sid]
+  (lapse-claims! sid)
   (session/drop! sid)
+  nil)
+
+
+(defn- expire-session!
+  "End session `sid` for its silence, if it is still silent. The row goes
+   first here, and only then do the claims lapse: `session/expire!` decides
+   and removes in one step, so a call that refreshed the session since it
+   was listed keeps it, and one that comes after is refused before it
+   starts anything."
+  [sid]
+  (when (session/expire! sid)
+    (lapse-claims! sid))
   nil)
 
 
@@ -182,7 +201,7 @@
    another session's evictions are queued for their owner instead (§5), so
    nobody's ids stop resolving without them hearing it."
   [entry]
-  (run! release-session! (session/expired))
+  (run! expire-session! (session/expired))
   (let [bonus    (session-bonus)
         [before after]
         (swap-vals! state

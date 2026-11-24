@@ -24,10 +24,9 @@
    staged: minted on the first upload, deleted with the session."
   (:require [co.multiply.remontoire.rewire :as rewire])
   (:import
-    [java.nio.file FileVisitOption Files LinkOption Path]
+    [java.nio.file FileVisitResult Files Path SimpleFileVisitor]
     [java.nio.file.attribute FileAttribute]
-    [java.util UUID]
-    [java.util.stream Stream]))
+    [java.util UUID]))
 
 
 (def expiry-ms
@@ -235,14 +234,27 @@
 
 
 (defn- delete-tree!
-  "Delete `dir` and everything beneath it, best effort. Links are removed,
-   never followed: what a tenant linked to from its upload directory is not
-   the session's to delete."
+  "Delete `dir` and everything beneath it, best effort: what cannot be
+   listed or deleted is left where it is, and nothing is thrown — a session
+   ends whatever became of its files. Links are removed, never followed:
+   what a tenant linked to from its upload directory is not the session's
+   to delete."
   [^Path dir]
-  (when (Files/exists dir (make-array LinkOption 0))
-    (with-open [paths (Files/walk dir (make-array FileVisitOption 0))]
-      (doseq [^Path p (reverse (iterator-seq (Stream/.iterator paths)))]
-        (try (Files/deleteIfExists p) (catch Exception _ nil))))))
+  (let [delete! (fn [^Path p]
+                  (try (Files/deleteIfExists p) (catch Exception _ nil))
+                  FileVisitResult/CONTINUE)]
+    (try
+      (Files/walkFileTree dir
+        ;; A failed visit is a path that is unreadable or already gone, and
+        ;; the walk goes on past it: an empty directory may still go.
+        (proxy [SimpleFileVisitor] []
+          (visitFile [p _] (delete! p))
+
+          (visitFileFailed [p _] (delete! p))
+
+          (postVisitDirectory [p _] (delete! p))))
+      (catch Exception _ nil))
+    nil))
 
 
 ;; One directory per JVM under the platform temp directory, the sessions'
@@ -296,6 +308,30 @@
     @state))
 
 
+(defn- stale?
+  "Whether a session's row says its silence has outlasted `expiry-ms`. No
+   row, or one without a stamp, counts as ancient."
+  [row]
+  (< (or (:last-seen row) 0) (- (now) expiry-ms)))
+
+
+(defn- end!
+  "Take `sid`'s row if `go?` says so of it — asked in the step that takes
+   it — and with the row what dies with a session: its scratch family and
+   its upload directory. Whether it went."
+  [sid go?]
+  (let [[before after] (locking scratch-lock
+                         (let [[_ after :as swapped]
+                               (swap-vals! state (fn [m] (if (go? (get m sid)) (dissoc m sid) m)))]
+                           (when (and (some? sid) (not (contains? after sid)))
+                             (run! remove-ns (scratch-nses sid)))
+                           swapped))
+        gone?          (not (contains? after sid))]
+    (when gone?
+      (some-> (get-in before [sid :upload-dir]) delete-tree!))
+    gone?))
+
+
 (defn drop!
   "Forget `sid`. The registry releases a session's entry claims before
    dropping it — see `registry/release-session!`, which owns that order.
@@ -306,13 +342,17 @@
    than working on in a ghost. The sessionless in-process caller's shared
    scratch family is never removed — no session to die with."
   [sid]
-  (let [[before] (locking scratch-lock
-                   (let [swapped (swap-vals! state dissoc sid)]
-                     (when (some? sid)
-                       (run! remove-ns (scratch-nses sid)))
-                     swapped))]
-    (some-> (get-in before [sid :upload-dir]) delete-tree!))
+  (end! sid (constantly true))
   nil)
+
+
+(defn expire!
+  "`drop!`, if `sid`'s silence still outlasts `expiry-ms`, and whether it
+   went. `expired` lists and this decides: a session that was refreshed in
+   between — by a call that has since been let in — must stay, or that
+   call's work is left with an owner the server refuses."
+  [sid]
+  (end! sid stale?))
 
 
 (defn expired
@@ -322,11 +362,7 @@
    entry counts as ancient: it can only arise from a write racing a drop,
    and releasing it again is harmless."
   []
-  (let [cutoff (- (now) expiry-ms)]
-    (into []
-      (keep (fn [[sid {:keys [last-seen]}]]
-              (when (< (or last-seen 0) cutoff) sid)))
-      @state)))
+  (into [] (keep (fn [[sid row]] (when (stale? row) sid))) @state))
 
 
 (defn live-count

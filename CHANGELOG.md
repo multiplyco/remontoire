@@ -25,6 +25,11 @@
   later one.
 - Session ids are five letters, where they were three, and task ids are longer by the same two: `bfwkm-12`. Three
   letters could not last a long-lived JVM once ids stopped being reused.
+- A session that makes a call at the instant another session's admission is expiring it stays live. It could be
+  dropped after the call had been let in, leaving that call's eval running under an id the server then refused.
+- A session whose upload directory cannot be read or deleted still ends, and what can be deleted of it is. The
+  failure used to surface as an error on whichever eval's admission happened to reap the session, with that eval
+  left running and unregistered.
 
 ## 0.9.0 - 2026-11-20
 

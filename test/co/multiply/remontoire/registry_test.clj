@@ -8,7 +8,10 @@
     [co.multiply.remontoire.registry :as registry]
     [co.multiply.remontoire.session :as session]
     [co.multiply.remontoire.tee :as tee]
-    [co.multiply.remontoire.test-util :as tu]))
+    [co.multiply.remontoire.test-util :as tu])
+  (:import
+    [java.io File]
+    [java.nio.file Path]))
 
 
 (use-fixtures :each (fn [f] (tu/reset-state!) (f)))
@@ -158,6 +161,42 @@
     (is (not-any? #(= sid (:sid %)) (session/roster)))
     (is (= :a @(registry/res a))
       "death degrades — the entry stays res-able until pressure claims it")))
+
+
+(deftest a-session-whose-files-cannot-be-deleted-still-ends
+  ;; Its upload directory is closed to the JVM. The admission that reaps it
+  ;; goes through, and the claims lapse as for any other dead session.
+  (let [sid (session/mint!)
+        a   (admit! sid :a)
+        dir (Path/.toFile (session/upload-dir! sid))]
+    (spit (File. dir "staged") "x")
+    (File/.setReadable dir false false)
+    (File/.setExecutable dir false false)
+    (try
+      (swap! @#'session/state assoc-in [sid :last-seen] 0)
+      (let [b (admit! (session/mint!) :other)]
+        (is (= :other @(registry/res b)) "the admitting eval is on the books")
+        (is (not (session/live? sid)))
+        (is (some? (:touched (registry/entry a))) "and what the dead session owned is no longer protected"))
+      (finally
+        (File/.setReadable dir true false)
+        (File/.setExecutable dir true false)
+        (run! File/.delete (reverse (file-seq dir)))))))
+
+
+(deftest a-session-that-woke-as-the-sweep-reached-it-is-kept
+  ;; The sweep lists the silent, then ends them. A call let in between the
+  ;; two has refreshed its session and may have started work.
+  (let [sid    (session/mint!)
+        silent session/expired]
+    (swap! @#'session/state assoc-in [sid :last-seen] 0)
+    (with-redefs [session/expired (fn []
+                                    (let [listed (silent)]
+                                      (session/refresh! sid)
+                                      listed))]
+      (let [a (admit! sid :a)]
+        (is (session/live? sid) "listed as silent, awake by the time it would have been ended")
+        (is (= [{:id a :status :done}] (registry/owed sid)) "and what it started is still its own")))))
 
 
 (deftest evals-lists-everything-with-attribution
