@@ -38,6 +38,9 @@
 - In a batch, each call's progress goes out under the progress token that call attached. It all went out under
   the first token in the batch, and a later call's first output lines were cut by as much as the call before it
   had printed.
+- Asking about a result no longer counts as reading it. `(__r/failure id)` on an entry that had not failed, and
+  `tasks/cancel` on a task that had already settled, both marked the entry delivered, after which an unread result
+  could be evicted. A failure that is rendered is still delivered, and so is a cancellation that ended its task.
 - An `eval` passed `background` on a call that does not declare the tasks extension says so in its response, with
   how to wait for the result. The flag used to be dropped in silence. Only a client whose calls declare less than
   its tool listing did can send it.

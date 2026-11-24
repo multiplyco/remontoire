@@ -1070,6 +1070,14 @@
           {::delivered (::delivered returned)})))))
 
 
+(defn- deliver-when-cancelled!
+  "Mark entry `id` delivered once `task` has settled, if it settled
+   cancelled."
+  [task id]
+  (q/finally task (fn [_ _ cancelled?] (when cancelled? (registry/touch! id))))
+  nil)
+
+
 (defn- task-method
   [id method {:keys [taskId]}]
   (if-let [{entry-id :id :keys [task] :as entry} (followed-entry taskId)]
@@ -1077,9 +1085,13 @@
       "tasks/get" (task-get id entry)
       ;; Remontoire's evals can be stopped, so cancel is real — and, like
       ;; the `cancel` tool, it delivers the ending it authors: nobody reads
-      ;; a task they deliberately killed (§5).
+      ;; a task they deliberately killed (§5). Authored means the task ends
+      ;; cancelled, which is known only once it has settled: one that had
+      ;; finished already, or finishes before the cancel bites, was not
+      ;; ended by it, and its result stays owed.
       "tasks/cancel" (do (q/cancel task)
-                       (with-meta (result id {}) {::delivered #(registry/touch! entry-id)}))
+                       (with-meta (result id {})
+                         {::delivered #(deliver-when-cancelled! task entry-id)}))
       "tasks/update" (result id {}))
     (error id -32602 "Task not found.")))
 

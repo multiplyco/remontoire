@@ -6,6 +6,7 @@
     [clojure.string :as str]
     [clojure.test :refer [deftest is use-fixtures]]
     [co.multiply.quiescent :as q]
+    [co.multiply.remontoire.api :as api]
     [co.multiply.remontoire.mcp :as mcp]
     [co.multiply.remontoire.registry :as registry]
     [co.multiply.remontoire.session :as session]
@@ -226,6 +227,45 @@
     (is (str/includes? (tu/text-of (tu/call! sid "eval" {:code "2"}))
           "(__r/manual)")
       "an undelivered note burns nothing — the next response carries it")))
+
+
+(deftest asking-how-an-entry-failed-delivers-only-a-failure
+  (let [sid     (session/mint!)
+        running (tu/id-of (tu/call! sid "eval" {:code "(q/sleep 60000)" :await 1}))
+        failed  (tu/id-of (tu/call! sid "eval" {:code "(q/sleep 50) (throw (ex-info \"no\" {}))" :await 1}))]
+    (try
+      @(q/await (registry/task failed) 2000)
+      (is (string? (api/failure running)))
+      (is (nil? (:touched (registry/entry running))) "an entry still running has delivered nothing")
+      (is (nil? (:touched (registry/entry failed))))
+      (is (str/includes? (api/failure failed) "no"))
+      (is (some? (:touched (registry/entry failed))) "a failure read is a failure delivered")
+      (finally (q/cancel (registry/task running))))))
+
+
+(deftest a-failure-is-read-whole-though-its-entry-goes-once-delivered
+  ;; Delivered, an entry can be evicted, here by admissions that come the
+  ;; moment the mark is made.
+  (let [sid    (session/mint!)
+        failed (tu/id-of (tu/call! sid "eval" {:code "(q/sleep 50) (throw (ex-info \"no\" {}))" :await 1}))
+        state  @#'registry/state
+        admit! (fn []
+                 (dotimes [_ 3]
+                   (registry/touch!
+                     (:id (registry/capture! {:task (doto (q/promise) (deliver :x)) :baseline (atom nil) :bank (tee/bank)
+                                              :peer "test" :session sid :at (java.util.Date.)})))))
+        fired  (atom false)]
+    @(q/await (registry/task failed) 2000)
+    (registry/capacity! 1)
+    (add-watch state ::admit
+      (fn [_ _ _ now]
+        (when (and (:touched (get-in now [:entries failed])) (compare-and-set! fired false true))
+          (admit!))))
+    (try
+      (is (str/includes? (api/failure failed) "no"))
+      (is (true? @fired))
+      (is (thrown? Exception (registry/entry failed)) "and it did go")
+      (finally (remove-watch state ::admit)))))
 
 
 (deftest evictions-are-announced-never-silent

@@ -125,17 +125,22 @@
 
    A rendering, not the throwable — for programmatic access,
    `(q/get-ex (res id))` is the exception itself as a value. Reading a
-   failure is delivery, like any `res`.
+   failure is delivery, like any `res`; being told how an entry that did
+   not fail stands is not.
 
    Output shape:
    String"
   [id]
-  (let [task (registry/res id)]
-    (if (= :failed (registry/status task))
-      (exception/render
-        (exception/profile (q/get-ex task)
-          (some-> (:baseline (registry/entry id)) deref)))
-      (str "Entry " id " is " (name (registry/status task))))))
+  ;; One look at the entry, and delivery last: once delivered it can be
+  ;; evicted, and a second look might not find it.
+  (let [{:keys [task baseline]} (registry/entry id)
+        status (registry/status task)]
+    (if (= :failed status)
+      (let [rendering (exception/render
+                        (exception/profile (q/get-ex task) (some-> baseline deref)))]
+        (registry/touch! id)
+        rendering)
+      (str "Entry " id " is " (name status)))))
 
 
 (defn sessions

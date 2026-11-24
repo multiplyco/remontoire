@@ -169,6 +169,70 @@
     (is (= "cancelled" (get-in (rpc! "tasks/get" {:taskId task-id}) [:result :status])))))
 
 
+(def ^:private gate
+  "What an eval in a test waits on until the test lets it go."
+  (atom nil))
+
+
+(defn- held-task!
+  "A background eval for `sid` that waits on `gate` and then returns
+   `:kept` — so its task id is in hand before it can settle. Returns
+   `[task-id entry-id]`."
+  [sid]
+  (reset! gate (promise))
+  (let [task-id (get-in (call! "eval" {:code (str "@@@#'" `gate " :kept") :session-id sid :background true})
+                  [:result :taskId])]
+    [task-id (some-> task-id (str/split #"-") second parse-long)]))
+
+
+(defn- collectable?
+  "Whether `task-id`'s result can still be collected once the registry has
+   been put under pressure."
+  [sid task-id]
+  (registry/capacity! 1)
+  (dotimes [n 4] (call! "eval" {:code (str n) :session-id sid}))
+  (let [collected (rpc! "tasks/get" {:taskId task-id})]
+    (and (= "completed" (get-in collected [:result :status]))
+      (str/starts-with? (str (get-in collected [:result :result :content 0 :text])) ":kept"))))
+
+
+(deftest a-cancel-that-comes-too-late-leaves-the-result-owed
+  ;; The task had settled, unread, before the cancel came.
+  (let [sid             (create-session!)
+        [task-id entry] (held-task! sid)]
+    (deliver @gate :go)
+    @(q/await (registry/task entry) 2000)
+    (rpc! "tasks/cancel" {:taskId task-id})
+    (is (nil? (:touched (registry/entry entry))) "nothing was delivered")
+    (is (collectable? sid task-id))))
+
+
+(deftest a-cancel-that-loses-to-the-tasks-own-ending-leaves-the-result-owed
+  ;; Running when the cancel is asked for, finished before it bites.
+  (let [sid             (create-session!)
+        [task-id entry] (held-task! sid)]
+    (with-redefs-fn {#'q/cancel (fn [task]
+                                  (deliver @gate :go)
+                                  @(q/await task 2000))}
+      #(rpc! "tasks/cancel" {:taskId task-id}))
+    (is (= :done (registry/status (registry/task entry))))
+    (is (nil? (:touched (registry/entry entry))))
+    (is (collectable? sid task-id))))
+
+
+(deftest a-cancel-that-ends-its-task-delivers-that-ending
+  (let [sid             (create-session!)
+        [task-id entry] (held-task! sid)]
+    (rpc! "tasks/cancel" {:taskId task-id})
+    @(q/await (registry/task entry) 2000)
+    (is (= :cancelled (registry/status (registry/task entry))))
+    (is (loop [n 0]
+          (cond (:touched (registry/entry entry)) true
+                (< 100 n) false
+                :else (do (Thread/sleep 10) (recur (inc n)))))
+      "once it has settled: nobody reads a task they killed")))
+
+
 (deftest task-ids-name-only-their-owners-entries
   (let [sid     (create-session!)
         task-id (get-in (call! "eval" {:code "(Thread/sleep 600)" :session-id sid}) [:result :taskId])
