@@ -372,18 +372,6 @@
         (respond! exchange 202 nil nil)))))
 
 
-(defn- served
-  "Call `f` with `ctx` — who sent `payload` — while its requests are on
-   the books as in flight (§5): from before they are dispatched until
-   their response has been written, or the write has failed. The write is
-   inside on purpose: a request whose answer is still on its way out is
-   one a cancellation can name."
-  [ctx payload f]
-  (let [ctx (mcp/admit ctx payload)]
-    (try (f ctx)
-      (finally (mcp/dismiss ctx)))))
-
-
 (defn- serve-modern!
   "A stateless-wire request (§11): nothing but its own headers to check."
   [exchange payload peer]
@@ -392,7 +380,7 @@
       (encode {:jsonrpc "2.0"
                :id      (when (map? payload) (:id payload))
                :error   {:code code :message message}}))
-    (served {:peer peer :stateless? true} payload
+    (mcp/with-admission {:peer peer :stateless? true} payload
       #(answer! exchange payload % nil mcp/handle-modern))))
 
 
@@ -401,7 +389,7 @@
    `initialize`, and is what a stale tool list is announced to."
   [exchange payload peer]
   (let [cid (connection! exchange payload)]
-    (served {:peer peer :connection cid} payload
+    (mcp/with-admission {:peer peer :connection cid} payload
       (fn [ctx]
         (answer! exchange payload ctx (when cid #(mcp/tools-changed? cid)) mcp/handle-payload)))))
 

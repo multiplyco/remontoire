@@ -84,9 +84,11 @@
   nil)
 
 
-(defn- admitted
-  "Call `f` with `ctx`, its requests on the books: as the transport
-   admitted them, or for the length of this call."
+(defn with-admission
+  "Call `f` with the requests in `payload` registered for cancellation.
+   The outermost call owns the records. HTTP wraps dispatch and the
+   response write so a cancellation can still arrive during the write.
+   A direct dispatcher call owns its records until it returns."
   [ctx payload f]
   (if (::requests ctx)
     (f ctx)
@@ -1000,7 +1002,7 @@
    warrants a reply."
   ([payload] (handle-payload payload {}))
   ([payload ctx]
-   (admitted ctx payload
+   (with-admission ctx payload
      (fn [ctx]
        (if (sequential? payload)
          (seq (into [] (keep #(handle-message % ctx)) payload))
@@ -1152,4 +1154,4 @@
   "One stateless-wire message, already past the transport's header checks.
    Returns the response, or nil for a notification."
   [message ctx]
-  (admitted ctx message #(answer-modern message %)))
+  (with-admission ctx message #(answer-modern message %)))
