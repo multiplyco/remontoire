@@ -48,6 +48,14 @@
   answered with the other's size.
 - A `tools/list` response that fails to reach its client no longer stops `tools/list_changed` from being announced
   to it.
+- `init!` and `status` report the address the server bound, in `:url` and in `:opts`' `:port`. With `:port 0`
+  they reported port 0, and with an IPv6 `:bind` a URL that could not be parsed. A `:bind` given as a name is now
+  reported as the address it resolved to.
+- An `init!` that fails leaves the host as it was. With the port taken it used to leave `*out*` and `*err*`
+  wrapped, and the registry capacity and server description set to what the failed call asked for. With an
+  `:allowed-origins` that was not a collection it used to keep the port, so that a corrected call could not bind.
+- `init!` and `stop!` no longer throw when the line they print cannot be written. `init!` used to throw with the
+  endpoint started.
 - An `eval` passed `background` on a call that does not declare the tasks extension says so in its response, with
   how to wait for the result. The flag used to be dropped in silence. Only a client whose calls declare less than
   its tool listing did can send it.

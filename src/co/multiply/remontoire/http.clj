@@ -541,20 +541,30 @@
 (defn start!
   "Bind and start. Returns the HttpServer."
   ^HttpServer [{:keys [port bind allowed-origins]}]
-  (doto (HttpServer/create (InetSocketAddress. ^String bind (int port)) 0)
-    (HttpServer/.createContext "/mcp" (handler #'handle-exchange!
-                                        {:allowed-origins (set allowed-origins)}))
-    (HttpServer/.createContext "/probe" (handler #'handle-probe!
-                                          {:allowed-origins (set allowed-origins)}))
-    (HttpServer/.createContext "/upload" (handler #'handle-upload!
-                                           {:allowed-origins (set allowed-origins)}))
-    ;; The default executor runs every exchange serially on the dispatch
-    ;; thread, which deadlocks on the second connection. Quiescent's own
-    ;; executor rather than a fresh virtual one: handler threads then carry
-    ;; the same classloader as every task thread, and a task constructed in
-    ;; a handler is rooted, since the handler is not itself a task.
-    (HttpServer/.setExecutor q.exec/virtual-executor)
-    (HttpServer/.start)))
+  ;; Whatever can fail on its options comes before the port is taken, and
+  ;; nothing comes between taking it and starting: a server that has bound
+  ;; and never started does not give its port back when stopped.
+  (let [opts   {:allowed-origins (set allowed-origins)}
+        mcp    (handler #'handle-exchange! opts)
+        probe  (handler #'handle-probe! opts)
+        upload (handler #'handle-upload! opts)]
+    (doto (HttpServer/create (InetSocketAddress. ^String bind (int port)) 0)
+      (HttpServer/.createContext "/mcp" mcp)
+      (HttpServer/.createContext "/probe" probe)
+      (HttpServer/.createContext "/upload" upload)
+      ;; The default executor runs every exchange serially on the dispatch
+      ;; thread, which deadlocks on the second connection. Quiescent's own
+      ;; executor rather than a fresh virtual one: handler threads then carry
+      ;; the same classloader as every task thread, and a task constructed in
+      ;; a handler is rooted, since the handler is not itself a task.
+      (HttpServer/.setExecutor q.exec/virtual-executor)
+      (HttpServer/.start))))
+
+
+(defn address
+  "The address `server` is bound to."
+  ^InetSocketAddress [server]
+  (HttpServer/.getAddress server))
 
 
 (defn stop!

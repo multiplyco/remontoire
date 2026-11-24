@@ -17,9 +17,8 @@
     [co.multiply.remontoire.test-util :as tu]
     [co.multiply.remontoire.upload :as upload])
   (:import
-    [com.sun.net.httpserver HttpServer]
     [java.io File InputStream]
-    [java.net InetSocketAddress URI]
+    [java.net URI]
     [java.net.http HttpClient HttpHeaders HttpRequest HttpRequest$Builder
      HttpRequest$BodyPublishers HttpResponse HttpResponse$BodyHandlers]
     [java.util Optional]))
@@ -31,13 +30,10 @@
 (use-fixtures :once
   (fn [f]
     (tu/reset-state!)
-    (remontoire/init! {:port            0
-                       :describe        "the test rig"
-                       :allowed-origins #{"https://ok.example"}})
-    (let [server (:server @@#'remontoire/running)
-          port   (InetSocketAddress/.getPort (HttpServer/.getAddress server))]
-      (binding [*url* (str "http://127.0.0.1:" port "/mcp")]
-        (try (f) (finally (remontoire/stop!)))))))
+    (binding [*url* (:url (remontoire/init! {:port            0
+                                             :describe        "the test rig"
+                                             :allowed-origins #{"https://ok.example"}}))]
+      (try (f) (finally (remontoire/stop!))))))
 
 
 (def ^:private client (HttpClient/newHttpClient))

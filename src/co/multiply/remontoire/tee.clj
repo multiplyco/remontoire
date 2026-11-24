@@ -187,7 +187,8 @@
    by `init!`, so a host that never inits never has its roots touched.
    `getRawRoot`, not the deref: install runs on a caller's thread, where
    either var may well be thread-bound to something that is not the root
-   at all."
+   at all. Returns whether this call did the swap, so a caller that then
+   fails can undo its own install and no one else's."
   []
   (locking installed
     (when-not @installed
@@ -195,8 +196,8 @@
             err (Var/.getRawRoot #'*err*)]
         (alter-var-root #'*out* (constantly (tee-writer out)))
         (alter-var-root #'*err* (constantly (tee-writer err)))
-        (reset! installed {:out out :err err})))
-    nil))
+        (reset! installed {:out out :err err})
+        true))))
 
 
 (defn uninstall!

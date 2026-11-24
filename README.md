@@ -164,7 +164,7 @@ defaults:
 
 | Option             | Default       | Meaning                                                                                           |
 |--------------------|---------------|---------------------------------------------------------------------------------------------------|
-| `:port`            | `7888`        | Port for the `/mcp` endpoint.                                                                     |
+| `:port`            | `7888`        | Port for the `/mcp` endpoint. `0` takes any free port; `init!` returns the address it got.        |
 | `:bind`            | `"127.0.0.1"` | Interface to bind. Keep it loopback, or a private (e.g. tailnet) address.                         |
 | `:allowed-origins` | `#{}`         | Browser `Origin` values accepted. Empty refuses every browser (see below).                        |
 | `:capacity`        | `20`          | Settled, delivered registry entries retained; raise if results you reach back for report evicted. |

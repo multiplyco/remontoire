@@ -1,11 +1,12 @@
 (ns co.multiply.remontoire
   "Public entry point. Inert until `init!`."
   (:require
-    [clojure.string :as str]
     [co.multiply.remontoire.http :as http]
     [co.multiply.remontoire.mcp :as mcp]
     [co.multiply.remontoire.registry :as registry]
-    [co.multiply.remontoire.tee :as tee]))
+    [co.multiply.remontoire.tee :as tee])
+  (:import
+    [java.net InetAddress InetSocketAddress URI]))
 
 
 (def ^:private defaults
@@ -30,27 +31,84 @@
 (defonce ^:private running (atom nil))
 
 
+(defn- announce
+  "Say `words` on `*out*`, best effort: the endpoint has started or stopped
+   whether or not there is anyone to tell."
+  [& words]
+  (try (apply println words)
+    (catch Exception _ nil)))
+
+
+(defn- url
+  "Where an endpoint bound to `address` answers. Built from the address
+   the server holds, never from what was asked for: `127.1` and `[::1]`
+   both bind, and a literal address always makes a URL."
+  [^InetSocketAddress address]
+  (str (URI. "http" nil
+         (InetAddress/.getHostAddress (InetSocketAddress/.getAddress address))
+         (InetSocketAddress/.getPort address)
+         "/mcp" nil nil)))
+
+
+(defn- adopt!
+  "Apply `opts` to the host — the registry's capacity, the server's
+   description, the tees at the roots of `*out*` and `*err*` — and return
+   a function that puts back what was there. A bad option throws with
+   nothing changed."
+  [{:keys [capacity] :as opts}]
+  (let [capacity-was (registry/capacity)
+        describe-was (:describe (mcp/probe))]
+    ;; First, because it is the one that refuses a value.
+    (registry/capacity! capacity)
+    (mcp/configure! (select-keys opts [:describe]))
+    ;; Root `*out*` tee for output attribution (§11) — install is part of
+    ;; init, so inert-until-init covers the root swap too.
+    (let [installed? (tee/install!)]
+      (fn []
+        (when installed? (tee/uninstall!))
+        (mcp/configure! {:describe describe-was})
+        (registry/capacity! capacity-was)))))
+
+
+(defn- endpoint
+  "What is kept, and reported, of a started `server`: the address it got,
+   which is not the one asked for when the port was 0 or the host a name."
+  [server opts]
+  (let [address (http/address server)]
+    {:server server
+     :url    (url address)
+     :opts   (-> opts (dissoc :allowed-origins) (assoc :port (InetSocketAddress/.getPort address)))}))
+
+
 (defn init!
   "Start the MCP endpoint. Idempotent: a second call returns the running one
-   rather than binding another."
+   rather than binding another. `:port 0` takes any free port, and the
+   `:url` and `:opts` returned name the one it got. A start that fails — a
+   bad option, the port taken — throws and leaves the host as it was."
   ([] (init! {}))
   ([opts]
    (locking running
      (-> (or @running
-           (let [{:keys [port bind capacity] :as opts} (merge defaults opts)]
-             ;; Before the port opens, so no request ever sees the default
-             ;; when an override was given.
-             (registry/capacity! capacity)
-             (mcp/configure! (select-keys opts [:describe]))
-             ;; Root `*out*` tee for output attribution (§11) — install is
-             ;; part of init, so inert-until-init covers the root swap too.
-             (tee/install!)
-             (let [info {:server (http/start! opts)
-                         :url    (str "http://" bind ":" port "/mcp")
-                         :opts   (dissoc opts :allowed-origins)}]
-               (reset! running info)
-               (println "remontoire listening on" (:url info))
-               info)))
+           (let [opts   (merge defaults opts)
+                 ;; Before the port opens, so no request ever sees the
+                 ;; default when an override was given.
+                 undo!  (adopt! opts)
+                 ;; Nothing runs when this fails, so `stop!` has nothing to
+                 ;; undo: what was adopted goes back here.
+                 server (try (http/start! opts)
+                          (catch Throwable t
+                            (undo!)
+                            (throw t)))
+                 ;; The same goes for a failure once it answers, which must
+                 ;; not leave an endpoint that `stop!` knows nothing of.
+                 info   (try (endpoint server opts)
+                          (catch Throwable t
+                            (http/stop! server)
+                            (undo!)
+                            (throw t)))]
+             (reset! running info)
+             (announce "remontoire listening on" (:url info))
+             info))
        (dissoc :server)))))
 
 
@@ -62,7 +120,7 @@
       (http/stop! server)
       (tee/uninstall!)
       (reset! running nil)
-      (println "remontoire stopped" url)
+      (announce "remontoire stopped" url)
       :stopped)))
 
 
@@ -74,7 +132,10 @@
    anything is lost, and eviction stays announced where it always is — in a
    response footer."
   [n]
-  (registry/capacity! n))
+  ;; Under `init!`'s lock: a start that fails puts the old capacity back,
+  ;; and must not put it back over one set here meanwhile.
+  (locking running
+    (registry/capacity! n)))
 
 
 (defn status

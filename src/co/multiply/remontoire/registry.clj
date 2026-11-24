@@ -27,11 +27,12 @@
   (atom {:next-id 1 :entries (sorted-map)}))
 
 
-(defn- capacity
-  "In `state` so a tuned cap survives reloads the way the entries do; absent
-   until tuned, because `defonce` state predating this key must keep working."
-  [state]
-  (or (:capacity state) default-capacity))
+(defn capacity
+  "How many settled, delivered entries are retained (§5). In `state` so a
+   tuned cap survives reloads the way the entries do; absent until tuned,
+   because `defonce` state predating this key must keep working."
+  ([] (capacity @state))
+  ([state] (or (:capacity state) default-capacity)))
 
 
 (defn capacity!
