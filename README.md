@@ -144,7 +144,7 @@ carrying its own Quiescent dependency resolves a single version for both.
 Add it from [Clojars](https://clojars.org/co.multiply/remontoire):
 
 ```clojure
-co.multiply/remontoire {:mvn/version "0.9.0"}
+co.multiply/remontoire {:mvn/version "0.10.0"}
 ```
 
 ## Starting the endpoint
@@ -178,7 +178,7 @@ and post-deploy sanity. Plain JSON, no session minted, no state touched:
 
 ```
 $ curl http://127.0.0.1:7888/probe
-{"server":"remontoire","version":"0.9.0","describe":"the production system behind example.com"}
+{"server":"remontoire","version":"0.10.0","describe":"the production system behind example.com"}
 ```
 
 `server` is the fixed discriminator to key on; `describe` is the `init!`-time self-description, `null` when unset.

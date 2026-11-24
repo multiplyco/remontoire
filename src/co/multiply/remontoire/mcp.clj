@@ -16,7 +16,7 @@
 
 
 (def ^:private server-info
-  {:name "Remontoire" :version "0.9.0"})
+  {:name "Remontoire" :version "0.10.0"})
 
 
 (def ^:private await-ms

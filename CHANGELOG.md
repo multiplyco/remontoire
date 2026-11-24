@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 - 2026-11-24
+
+What a client or a host will see differently:
 
 - A session is the same thing on every MCP revision: `create-session` mints it and every other tool takes it as
   `session-id`. Clients that open with `initialize` used to get their session from the handshake, in the
@@ -12,24 +14,33 @@
 - `Mcp-Session-Id` remains as a connection id. `DELETE` forgets the connection and no longer ends a session; sessions
   end by a day of silence. A request without the header is served.
 - `:by`, on other sessions' entries and uploads, is the owner's whole session id.
-- A cancellation notice stops only a request made on the connection it arrives on. It used to stop whatever waited
-  under that request id, another client's request included. Changed with it: a notice from a client that sends no
-  `Mcp-Session-Id` now does nothing, and a request id in flight twice on one connection is no longer stopped by a
-  notice.
+- A session id is not given out twice while the JVM runs, so nothing an ended session left running can reach a
+  later one.
+- Session ids are five letters, where they were three, and task ids are longer by the same two: `bfwkm-12`. Three
+  letters could not last a long-lived JVM once ids stopped being reused.
 - **Behaviour change, 2026-07-28 clients:** closing a held response stream now cancels the eval behind it, or ends
   the wait of an `await`. A client that timed out or lost its connection used to leave the eval running, its
   outcome announced on the next call; the eval is now cancelled when a write to the stream fails, which is how the
   server learns the stream is gone. Work whose task handle or `running` answer has already been sent is not
   affected. Clients that open with `initialize` are not affected: for them a disconnect still cancels nothing.
+- A cancellation notice stops only a request made on the connection it arrives on. It used to stop whatever waited
+  under that request id, another client's request included. Changed with it: a notice from a client that sends no
+  `Mcp-Session-Id` now does nothing, and a request id in flight twice on one connection is no longer stopped by a
+  notice.
+- An `eval` passed `background` on a call that does not declare the tasks extension says so in its response, with
+  how to wait for the result. The flag used to be dropped in silence. Only a client whose calls declare less than
+  its tool listing did can send it.
+- `init!` and `status` report the address the server bound, in `:url` and in `:opts`' `:port`. With `:port 0`
+  they reported port 0, and with an IPv6 `:bind` a URL that could not be parsed. A `:bind` given as a name is now
+  reported as the address it resolved to.
+
+Fixes:
+
 - A cancellation that arrives while its request's answer is being written leaves the result unread, to be announced
   on the next response. It used to be marked delivered.
 - A session that ends while one of its evals is still running stays ended. The eval's finish used to write the
   session back, leaving its id live with nothing behind it. A scratch namespace such an eval asks for is refused,
   where it used to be created and never removed.
-- A session id is not given out twice while the JVM runs, so nothing an ended session left running can reach a
-  later one.
-- Session ids are five letters, where they were three, and task ids are longer by the same two: `bfwkm-12`. Three
-  letters could not last a long-lived JVM once ids stopped being reused.
 - A session that makes a call at the instant another session's admission is expiring it stays live. It could be
   dropped after the call had been let in, leaving that call's eval running under an id the server then refused.
 - A session whose upload directory cannot be read or deleted still ends, and what can be deleted of it is. The
@@ -48,17 +59,11 @@
   answered with the other's size.
 - A `tools/list` response that fails to reach its client no longer stops `tools/list_changed` from being announced
   to it.
-- `init!` and `status` report the address the server bound, in `:url` and in `:opts`' `:port`. With `:port 0`
-  they reported port 0, and with an IPv6 `:bind` a URL that could not be parsed. A `:bind` given as a name is now
-  reported as the address it resolved to.
 - An `init!` that fails leaves the host as it was. With the port taken it used to leave `*out*` and `*err*`
   wrapped, and the registry capacity and server description set to what the failed call asked for. With an
   `:allowed-origins` that was not a collection it used to keep the port, so that a corrected call could not bind.
 - `init!` and `stop!` no longer throw when the line they print cannot be written. `init!` used to throw with the
   endpoint started.
-- An `eval` passed `background` on a call that does not declare the tasks extension says so in its response, with
-  how to wait for the result. The flag used to be dropped in silence. Only a client whose calls declare less than
-  its tool listing did can send it.
 
 ## 0.9.0 - 2026-11-20
 
