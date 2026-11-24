@@ -21,7 +21,7 @@
    :capacity        registry/default-capacity
    ;; The server's self-description, woven into the connect-time intro so
    ;; the environment names itself in its own voice — e.g. "the production
-   ;; system behind multiply.co" (§4). nil stays silent.
+   ;; system behind example.com" (§4). nil stays silent.
    :describe        nil})
 
 
