@@ -113,14 +113,22 @@
   (contains? @state sid))
 
 
+(defn- update-live
+  "Apply `f` to an existing session row. Updating a missing row would
+   bring its session back to life."
+  [rows sid f & args]
+  (if (contains? rows sid)
+    (apply update rows sid f args)
+    rows))
+
+
 (defn refresh!
   "Refresh `sid`'s last-seen stamp if it is live, and say whether it was.
    Never mints: neither a call naming a handle nor liveness evidence that
    arrives beside one — a heartbeat write, a task poll, an upload — may
    create the session it names."
   [sid]
-  (let [[before] (swap-vals! state
-                   (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :last-seen] (now)))))]
+  (let [[before] (swap-vals! state update-live sid #(assoc % :last-seen (now)))]
     (contains? before sid)))
 
 
@@ -289,8 +297,7 @@
       (when (live? sid)
         (let [dir (Files/createTempDirectory @upload-root (str sid "-")
                     (make-array FileAttribute 0))]
-          (swap! state
-            (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :upload-dir] dir))))
+          (swap! state update-live sid assoc :upload-dir dir)
           ;; A drop racing the mint leaves the directory unrecorded — take
           ;; it back rather than leak it.
           (or (upload-dir sid)
@@ -380,8 +387,7 @@
    knowing which client and version a measurement was made against keeps
    the measurements honest."
   [sid m]
-  (swap! state
-    (fn [state] (cond-> state (contains? state sid) (assoc-in [sid :client] m))))
+  (swap! state update-live sid assoc :client m)
   nil)
 
 
@@ -395,8 +401,7 @@
    words (§11). Conversational state like everything here: it dies with the
    session, which is right, because so does the purpose."
   [sid s]
-  (swap! state
-    (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :note] (str s)))))
+  (swap! state update-live sid #(assoc % :note (str s)))
   nil)
 
 
@@ -416,8 +421,7 @@
    client can reach this server's other doors. Guarded like `note!`: a
    request must not mint a session by being addressed somewhere."
   [sid address]
-  (swap! state
-    (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :address] address))))
+  (swap! state update-live sid assoc :address address)
   nil)
 
 
@@ -435,8 +439,7 @@
    dead sid is not recreated — which also makes the sessionless in-process
    caller a no-op."
   [sid]
-  (swap! state
-    (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :manual-read] true))))
+  (swap! state update-live sid assoc :manual-read true)
   nil)
 
 
@@ -455,8 +458,7 @@
    the model already judged spends the footer's credibility, the channel
    evictions and truncations must be believed on. Guarded like `note!`."
   [sid]
-  (swap! state
-    (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :nudged] true))))
+  (swap! state update-live sid assoc :nudged true)
   nil)
 
 
@@ -472,8 +474,7 @@
    released under it, and its ending must not write the session back — a
    row is all it takes for a handle to be live."
   [sid ns-sym]
-  (swap! state
-    (fn [m] (cond-> m (contains? m sid) (assoc-in [sid :current-ns] ns-sym))))
+  (swap! state update-live sid assoc :current-ns ns-sym)
   nil)
 
 
@@ -488,10 +489,7 @@
    mode regardless of whose admission did it. Drained into the owner's next
    response. A sid no longer live is not recreated — its reader is gone."
   [sid ids]
-  (swap! state
-    (fn [m]
-      (cond-> m
-        (contains? m sid) (update-in [sid :evictions] (fnil into []) ids))))
+  (swap! state update-live sid update :evictions (fnil into []) ids)
   nil)
 
 
@@ -504,11 +502,7 @@
   "Called only once the response carrying the news has actually gone out —
    the same discipline as every delivery mark (§5)."
   [sid ids]
-  (swap! state
-    (fn [m]
-      (cond-> m
-        (contains? m sid)
-        (update-in [sid :evictions] #(into [] (remove (set ids)) %)))))
+  (swap! state update-live sid update :evictions #(into [] (remove (set ids)) %))
   nil)
 
 
