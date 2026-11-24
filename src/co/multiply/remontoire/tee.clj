@@ -131,14 +131,15 @@
    last one. A `from` the cap already trimmed past gets the drop announced,
    same as `text`."
   [bank from]
-  (let [{:keys [total] :as state} @bank
-        s     (retained state)
-        start (- total (count s))]
-    [(cond
-       (>= from total) ""
-       (>= from start) (subs s (- from start))
-       :else (str "…[" (- start from) " chars dropped]\n" s))
-     total]))
+  (let [{:keys [total] :as state} @bank]
+    (if (>= from total)
+      ["" total]
+      (let [s     (retained state)
+            start (- total (count s))]
+        [(if (>= from start)
+           (subs s (- from start))
+           (str "…[" (- start from) " chars dropped]\n" s))
+         total]))))
 
 
 (defn- relay
