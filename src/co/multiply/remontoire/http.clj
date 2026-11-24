@@ -173,6 +173,20 @@
     ": hb\n\n"))
 
 
+(defn- write-beat!
+  "Write a heartbeat while the response is still pending. The answering
+   thread delivers `done` under the same lock, so a beat in progress
+   finishes before the final response and no beat can follow it."
+  [send! done sids frame]
+  (locking done
+    (when-not (realized? done)
+      (if (send! frame)
+        ;; A successful write keeps each session named by the batch live
+        ;; through its wait (§11). A refused handle can't mint a session.
+        (do (run! session/refresh! sids) true)
+        (do (deliver done ::gone) false)))))
+
+
 (defn- heartbeat!
   "Two-speed narration on the stream until `done` delivers or a write fails.
    The loop polls the bank every `poll-ms` and beats the moment there is
@@ -211,32 +225,17 @@
                                 ["" cursor])
                 said   (->> (str/split-lines fresh)
                          (remove str/blank?)
-                         (str/join "\n"))
-                emit!  (fn [frame]
-                         ;; Under the lock, and only while `done` is
-                         ;; undelivered: a beat in progress finishes before
-                         ;; the answer is written, and none starts after.
-                         (locking done
-                           (when-not (realized? done)
-                             (if (send! frame)
-                               ;; A successful write is proof the client is
-                               ;; still there: open streams are liveness
-                               ;; (§11), so a session mid-await can never
-                               ;; expire under its own wait. Guarded: a sid
-                               ;; is a tool argument, and a beat must never
-                               ;; mint the session a refused handle names.
-                               (do (run! session/refresh! sids) true)
-                               (do (deliver done ::gone) false)))))]
+                         (str/join "\n"))]
             (cond
               (seq said)
-              (when (emit! (beat-frame token n (str said " · " secs " s")))
+              (when (write-beat! send! done sids (beat-frame token n (str said " · " secs " s")))
                 (recur (inc n) bank (long total) polls' 0))
 
               (>= idle' heartbeat-ms)
-              (when (emit! (beat-frame token n (str "evaluating · " secs " s")))
+              (when (write-beat! send! done sids (beat-frame token n (str "evaluating · " secs " s")))
                 (recur (inc n) bank cursor polls' 0))
 
-              (or (not probe?) (emit! ": hb\n\n"))
+              (or (not probe?) (write-beat! send! done sids ": hb\n\n"))
               (recur n bank cursor polls' idle'))))))))
 
 
