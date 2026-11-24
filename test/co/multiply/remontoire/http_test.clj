@@ -525,7 +525,19 @@
   (is (= 400 (HttpResponse/.statusCode
                (modern! "tools/call" {:name "eval" :arguments {}} {"Mcp-Name" "cancel"}))))
   (is (= 400 (HttpResponse/.statusCode
-               (modern! "tools/list" {} {"Mcp-Method" "tools/call"})))))
+               (modern! "tools/list" {} {"Mcp-Method" "tools/call"}))))
+  (is (= 400 (HttpResponse/.statusCode
+               (modern! "tasks/get" {:taskId "bcdfg-1"} {"Mcp-Name" "bcdfg-2"})))
+    "a task method's name header carries its task id")
+  (let [stateless {"MCP-Protocol-Version" mcp/protocol-version "Mcp-Method" "ping"}
+        ping      (fn [version]
+                    {:jsonrpc "2.0" :id 7 :method "ping"
+                     :params  {:_meta (assoc tasks-meta :io.modelcontextprotocol/protocolVersion version)}})]
+    (is (= 200 (HttpResponse/.statusCode (send! (ping mcp/protocol-version) {:headers stateless}))))
+    (is (= 400 (HttpResponse/.statusCode (send! (ping "2025-06-18") {:headers stateless})))
+      "the body names the revision its header does")
+    (is (= 400 (HttpResponse/.statusCode (send! [(ping mcp/protocol-version)] {:headers stateless})))
+      "and a stateless request is one message, never a batch")))
 
 
 (def ^:private gate
@@ -664,6 +676,23 @@
         (is (wait-until #(= :cancelled (:status (session-entry b)))))))))
 
 
+(deftest a-json-answer-that-fails-to-go-out-delivers-nothing
+  (let [cid     (initialize!)
+        sid     (create-session! cid)
+        respond @#'http/respond!]
+    (with-redefs-fn {#'http/respond! (fn [exchange status content-type body]
+                                       (if (= 200 status)
+                                         (throw (java.io.IOException. "the client is gone"))
+                                         (respond exchange status content-type body)))}
+      ;; What the client is told of the failure is not the point here.
+      #(try (send! (call-body sid "eval" {:code ":unread"}) {:cid cid})
+         (catch java.io.IOException _ nil)))
+    (let [{:keys [id]} (session-entry sid)]
+      (is (some? id) "the eval ran")
+      (is (nil? (:touched (registry/entry id))) "its result reached nobody, and stays protected")
+      (is (= [id] (mapv :id (registry/owed sid))) "and is still to be told"))))
+
+
 (deftest the-final-sse-response-hands-off-running-work
   ;; No heartbeat during the grace period. The first observed failure can
   ;; be the response carrying the task id, or the probe after that response.
@@ -688,9 +717,15 @@
           (fn []
             (let [response (HttpClient/.send client req (HttpResponse$BodyHandlers/ofString))]
               (is (realized? failed))
+              (is (= expected (:status (session-entry sid))))
               (when fail-probe?
-                (is (some? (get-in (first (stream-messages response)) [:result :taskId]))))
-              (is (= expected (:status (session-entry sid)))))))
+                (is (some? (get-in (first (stream-messages response)) [:result :taskId])))
+                ;; The probe failing says the answer may not have landed, so
+                ;; its marks were withheld: the entry is still to be told.
+                (let [id (:id (session-entry sid))]
+                  (q/cancel (registry/task id))
+                  @(q/await (registry/task id) 2000)
+                  (is (= [id] (mapv :id (registry/owed sid)))))))))
         (finally
           (when-let [entry (session-entry sid)]
             (q/cancel (registry/task (:id entry)))))))))

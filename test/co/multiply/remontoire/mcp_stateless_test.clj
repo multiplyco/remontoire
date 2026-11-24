@@ -233,6 +233,33 @@
       "once it has settled: nobody reads a task they killed")))
 
 
+(deftest following-a-task-keeps-its-session-live
+  (let [sid     (create-session!)
+        task-id (get-in (call! "eval" {:code "(Thread/sleep 60000)" :session-id sid :background true})
+                  [:result :taskId])
+        earlier (- (System/currentTimeMillis) 60000)
+        entry   (some-> task-id (str/split #"-") second parse-long)]
+    (try
+      (swap! @#'session/state assoc-in [sid :last-seen] earlier)
+      (rpc! "tasks/get" {:taskId task-id})
+      (is (< earlier (get-in @@#'session/state [sid :last-seen])))
+      (finally (q/cancel (registry/task entry))))))
+
+
+(deftest a-task-answer-is-the-last-word-on-its-entry
+  ;; The client follows the task and announces its ending. Nothing waits
+  ;; to be told by the server, and what the admission evicted is kept for
+  ;; the session's next response, a task answer carrying no text.
+  (let [sid  (create-session!)
+        _    (registry/capacity! 1)
+        _    (dotimes [n 3] (call! "eval" {:code (str n) :session-id sid}))
+        [_ entry] (held-task! sid)]
+    (is (seq (session/pending-evictions sid)) "the admission's losses wait for a response that can say them")
+    (deliver @gate :go)
+    @(q/await (registry/task entry) 2000)
+    (is (= [] (registry/owed sid)) "and the task's ending is not news")))
+
+
 (deftest task-ids-name-only-their-owners-entries
   (let [sid     (create-session!)
         task-id (get-in (call! "eval" {:code "(Thread/sleep 600)" :session-id sid}) [:result :taskId])

@@ -229,6 +229,27 @@
       "an undelivered note burns nothing — the next response carries it")))
 
 
+(deftest await-waits-for-all-of-and-for-one-of-any-of
+  ;; Whichever comes first, the other is still waited for.
+  (doseq [any-of-first? [true false]]
+    (let [sid     (session/mint!)
+          entry!  (fn [task]
+                    (:id (registry/capture! {:task task :baseline (atom nil) :bank (tee/bank)
+                                             :peer "test" :session sid :at (java.util.Date.)})))
+          [all one other] (repeatedly 3 q/promise)
+          [a b c] (mapv entry! [all one other])
+          [early late] (if any-of-first? [one all] [all one])
+          waiting (future (tu/call! sid "await" {:all-of [a] :any-of [b c] :await 5000}))]
+      (try
+        (deliver early :early)
+        (is (= ::waiting (deref waiting 200 ::waiting))
+          (if any-of-first? "one of any-of is not enough while all-of is out" "all-of is not enough with none of any-of in"))
+        (deliver late :late)
+        (is (not= ::waiting (deref waiting 2000 ::waiting)) "the other of any-of is not waited for")
+        (is (= :running (registry/status other)))
+        (finally (deliver other :done))))))
+
+
 (deftest a-tool-list-counts-as-fetched-once-it-has-gone-out
   (let [cid  (session/connect!)
         resp (mcp/handle-payload {:jsonrpc "2.0" :id 1 :method "tools/list"} {:peer "test" :connection cid})]
