@@ -83,6 +83,14 @@
   nil)
 
 
+(defn- release-claim
+  "Mark an entry delivered and told if it still exists."
+  [state id]
+  (if (get-in state [:entries id])
+    (-> state (touch id) (assoc-in [:entries id :announced] true))
+    state))
+
+
 (defn- lapse-claims!
   "The delivery claims of a session that has ended lapse: every entry it
    owns is marked delivered and told, so the eviction shield lifts and the
@@ -94,13 +102,7 @@
   (let [ids (into []
               (keep (fn [[id entry]] (when (= sid (:session entry)) id)))
               (:entries @state))]
-    (swap! state
-      (fn [state]
-        (reduce (fn [state id]
-                  (if (get-in state [:entries id])
-                    (-> state (touch id) (assoc-in [:entries id :announced] true))
-                    state))
-          state ids)))
+    (swap! state #(reduce release-claim % ids))
     nil))
 
 
@@ -166,13 +168,7 @@
                     [])
         cancelled (mapv :id stopped)]
     (run! (comp q/cancel :task) stopped)
-    (swap! state
-      (fn [state]
-        (reduce (fn [state id]
-                  (if (get-in state [:entries id])
-                    (-> state (touch id) (assoc-in [:entries id :announced] true))
-                    state))
-          state (into released cancelled))))
+    (swap! state #(reduce release-claim % (concat released cancelled)))
     {:released released :cancelled cancelled}))
 
 
