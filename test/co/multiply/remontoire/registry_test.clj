@@ -94,6 +94,23 @@
         (is (= :a @(registry/res a)) "the refreshed entry outlived its elder id")))))
 
 
+(deftest a-session-ended-twice-is-ended-once
+  (let [gone (session/mint!)
+        live (session/mint!)
+        a    (admit! gone :a)]
+    (registry/capacity! 1)
+    (registry/res a)
+    (registry/release-session! gone)
+    (let [b (admit! live :b)]
+      (registry/res b)
+      ;; Asked for again: what the session left behind is not made newer
+      ;; than what the living have read since.
+      (registry/release-session! gone)
+      (admit! live :pressure)
+      (is (= :b @(registry/res b)) "a result just read outlives one a session that ended left behind")
+      (is (thrown? Exception (registry/entry a))))))
+
+
 (deftest another-sessions-losses-are-queued-for-its-owner
   (let [s1 (session/mint!)
         s2 (session/mint!)]

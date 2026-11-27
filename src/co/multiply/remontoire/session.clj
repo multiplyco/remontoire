@@ -325,7 +325,8 @@
 (defn- end!
   "Take `sid`'s row if `go?` says so of it — asked in the step that takes
    it — and with the row what dies with a session: its scratch family and
-   its upload directory. Whether it went."
+   its upload directory. Whether it went: true of the one call that took
+   the row, and of no call for a session that had none."
   [sid go?]
   (let [[before after] (locking scratch-lock
                          (let [[_ after :as swapped]
@@ -333,24 +334,24 @@
                            (when (and (some? sid) (not (contains? after sid)))
                              (run! remove-ns (scratch-nses sid)))
                            swapped))
-        gone?          (not (contains? after sid))]
-    (when gone?
+        went?          (and (contains? before sid) (not (contains? after sid)))]
+    (when went?
       (some-> (get-in before [sid :upload-dir]) delete-tree!))
-    gone?))
+    went?))
 
 
 (defn drop!
-  "Forget `sid`. The registry releases a session's entry claims before
-   dropping it — see `registry/release-session!`, which owns that order.
-   Its upload directory is deleted, staged files and all. The session's
+  "Forget `sid`, and say whether there was a session to forget. The
+   registry releases a session's entry claims as it drops it — see
+   `registry/release-session!`, which owns that order. Its upload
+   directory is deleted, staged files and all. The session's
    scratch family goes with it — compartments included:
    conversational state dies with the session — so an eval somehow still
    running there fails loudly at its next form (`No namespace`) rather
    than working on in a ghost. The sessionless in-process caller's shared
    scratch family is never removed — no session to die with."
   [sid]
-  (end! sid (constantly true))
-  nil)
+  (end! sid (constantly true)))
 
 
 (defn expire!

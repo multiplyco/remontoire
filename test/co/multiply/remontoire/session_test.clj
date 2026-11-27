@@ -155,7 +155,8 @@
 
 (deftest a-handle-names-one-session-for-the-life-of-the-jvm
   (let [old (session/mint!)]
-    (session/drop! old)
+    (is (true? (session/drop! old)) "ended by the call that found it")
+    (is (false? (session/drop! old)) "and by no call after that")
     (let [fresh (mint-drawing-first old)]
       (is (not= old fresh))
       (is (not (session/live? old)))
@@ -192,7 +193,7 @@
         (is (= :waiting (deref ended 200 :waiting)) "the sweep does not run through a furnishing")
         (deliver proceed true)
         (is (some? (deref made 5000 nil)))
-        (is (nil? (deref ended 5000 :waiting)))))
+        (is (true? (deref ended 5000 :waiting)) "and takes the session once it is over")))
     (is (nil? (find-ns sub)))
     (is (not (session/live? sid))))
   (is (some? (session/furnish-for! nil (session/scratch-ns-sym nil)))
