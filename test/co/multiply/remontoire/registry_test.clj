@@ -3,8 +3,10 @@
    evicted, delivered entries go least-recently-touched first, eviction is
    announced, and release is punctuation with an audit."
   (:require
+    [clojure.string :as str]
     [clojure.test :refer [deftest is use-fixtures]]
     [co.multiply.quiescent :as q :refer [q]]
+    [co.multiply.remontoire.mcp :as mcp]
     [co.multiply.remontoire.registry :as registry]
     [co.multiply.remontoire.session :as session]
     [co.multiply.remontoire.tee :as tee]
@@ -109,6 +111,110 @@
       (admit! live :pressure)
       (is (= :b @(registry/res b)) "a result just read outlives one a session that ended left behind")
       (is (thrown? Exception (registry/entry a))))))
+
+
+(deftest an-entry-admitted-after-its-session-ended-is-owed-to-nobody
+  (let [gone (session/mint!)
+        live (session/mint!)]
+    (registry/capacity! 1)
+    (registry/release-session! gone)
+    ;; Work that began while the session lived, admitted once it had gone.
+    ;; Nobody reads it: reading would lift the shield whoever it was kept for.
+    (let [late (admit! gone :late)]
+      (is (some? (registry/entry late)) "it is there for whoever holds its id")
+      (run! #(registry/res (admit! live %)) (range 3))
+      (is (thrown? Exception (registry/entry late)) "and is not kept for a reader that is gone"))))
+
+
+(deftest an-eval-admitted-as-its-session-ends-is-owed-to-nobody
+  ;; The session ends where its eval has begun and is about to be admitted.
+  (let [gone    (session/mint!)
+        live    (session/mint!)
+        capture registry/capture!]
+    (registry/capacity! 1)
+    (let [late (with-redefs [registry/capture! (fn [entry]
+                                                 ;; Under way: its namespace resolved, its first form running.
+                                                 (Thread/sleep 50)
+                                                 (registry/release-session! (:session entry))
+                                                 (capture entry))]
+                 ;; In a host namespace, so that the scratch going with
+                 ;; the session does not stop it; and answered while it
+                 ;; runs, so that the answer delivers no result.
+                 (tu/id-of (tu/call! gone "eval" {:code "(Thread/sleep 300) :late" :ns "clojure.string" :await 1})))
+          task (registry/task late)]
+      (is (= :running (registry/status task)) "the eval was begun, and answered as running")
+      @(q/await task 5000)
+      (is (= :late @task) "it ran to its end")
+      (run! #(registry/res (admit! live %)) (range 3))
+      (is (thrown? Exception (registry/entry late)) "and its result is not kept for a reader that is gone"))))
+
+
+(deftest an-entry-its-admission-lapsed-is-not-lapsed-again-by-the-sweep
+  ;; A session ends by losing its row and then sweeping its entries. An
+  ;; entry admitted between the two is lapsed by its admission, a live
+  ;; session reads a result of its own, and the sweep comes last.
+  (let [gone  (session/mint!)
+        live  (session/mint!)
+        drop! session/drop!
+        late  (atom nil)
+        read  (atom nil)]
+    (registry/capacity! 1)
+    (with-redefs [session/drop! (fn [sid]
+                                  (let [went? (drop! sid)]
+                                    (reset! late (admit! gone :late))
+                                    (reset! read (admit! live :read))
+                                    (registry/res @read)
+                                    went?))]
+      (registry/release-session! gone))
+    (admit! live :pressure)
+    (is (= :read @(registry/res @read)) "what the living read last is what is kept")
+    (is (thrown? Exception (registry/entry @late)) "over what a session that ended left behind")))
+
+
+(deftest an-entry-the-sweep-lapsed-is-not-lapsed-again-by-its-admission
+  ;; The other order: the entry is in when the sweep runs, and its
+  ;; admission looks at the session only afterwards.
+  (let [gone  (session/mint!)
+        live  (session/mint!)
+        live? session/live?
+        armed (atom true)
+        read  (atom nil)]
+    (registry/capacity! 1)
+    (let [late (with-redefs [session/live? (fn [sid]
+                                             (when (and (= gone sid) (compare-and-set! armed true false))
+                                               (registry/release-session! gone)
+                                               (reset! read (admit! live :read))
+                                               (registry/res @read))
+                                             (live? sid))]
+                 (admit! gone :late))]
+      (is (false? @armed) "the admission looked at its session")
+      (admit! live :pressure)
+      (is (= :read @(registry/res @read)))
+      (is (thrown? Exception (registry/entry late))))))
+
+
+(deftest an-eval-is-answered-though-its-entry-was-evicted
+  ;; Its session ends as it is admitted, so its result is owed to nobody,
+  ;; and others' admissions take the entry before the call has answered.
+  (let [gone     (session/mint!)
+        live     (session/mint!)
+        capture  registry/capture!
+        waiting  @#'mcp/await-request]
+    (registry/capacity! 1)
+    (let [answer (with-redefs [registry/capture!  (fn [entry]
+                                                    (when (= gone (:session entry))
+                                                      ;; Under way: its namespace resolved.
+                                                      (Thread/sleep 50)
+                                                      (registry/release-session! gone))
+                                                    (capture entry))
+                               mcp/await-request (fn [task ms request]
+                                                   (let [waited (waiting task ms request)]
+                                                     (run! #(registry/res (admit! live %)) (range 3))
+                                                     waited))]
+                   (tu/call! gone "eval" {:code ":late" :ns "clojure.string" :await 5000}))]
+      (is (thrown? Exception (registry/entry (tu/id-of answer))) "the entry is gone by the time the call answers")
+      (is (not (tu/tool-error? answer)) "and the call is answered with what it came to")
+      (is (str/starts-with? (str (tu/text-of answer)) ":late")))))
 
 
 (deftest another-sessions-losses-are-queued-for-its-owner

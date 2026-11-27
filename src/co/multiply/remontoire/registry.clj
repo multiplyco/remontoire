@@ -91,6 +91,19 @@
     state))
 
 
+(defn- lapse-claim
+  "Lift the shield of an entry whose reader is gone, if it still exists:
+   delivered, when it had not been, and told. One already delivered keeps
+   its place among the read — a lapse is not a reading, and an entry
+   lapsed twice, by the sweep of its session's end and by an admission
+   that found the session gone, is where one lapse left it."
+  [state id]
+  (if-let [entry (get-in state [:entries id])]
+    (-> (cond-> state (nil? (:touched entry)) (touch id))
+      (assoc-in [:entries id :announced] true))
+    state))
+
+
 (defn- lapse-claims!
   "The delivery claims of a session that has ended lapse: every entry it
    owns is marked delivered and told, so the eviction shield lifts and the
@@ -102,7 +115,7 @@
   (let [ids (into []
               (keep (fn [[id entry]] (when (= sid (:session entry)) id)))
               (:entries @state))]
-    (swap! state #(reduce release-claim % ids))
+    (swap! state #(reduce lapse-claim % ids))
     nil))
 
 
@@ -196,6 +209,12 @@
    forever and where the capacity formula needs the live count. No reaper
    thread — the machinery stays inert until asked, like everything else.
 
+   An entry admitted for a session that has ended is owed to nobody, and
+   is admitted as one whose claim has lapsed. Looked at after the entry is
+   in: a session ends by losing its row and then lapsing its claims, so an
+   entry admitted before the lapse is lapsed by it, and one admitted after
+   finds the row gone.
+
    Returns {:id n :evicted [ids]} — `evicted` holding the admitting
    session's own losses only, which the caller announces in its response;
    another session's evictions are queued for their owner instead (§5), so
@@ -216,11 +235,14 @@
                 (assoc :next-id (inc next-id))
                 (assoc :entries (reduce dissoc entries doomed))))))
         evicted  (into [] (remove (:entries after)) (keys (:entries before)))
+        id       (:next-id before)
         owner    (:session entry)
         by-owner (group-by #(get-in before [:entries % :session]) evicted)]
+    (when (and (some? owner) (not (session/live? owner)))
+      (swap! state lapse-claim id))
     (doseq [[sid ids] by-owner :when (not= sid owner)]
       (session/note-evictions! sid ids))
-    {:id      (:next-id before)
+    {:id      id
      :evicted (vec (get by-owner owner))}))
 
 
