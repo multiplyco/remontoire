@@ -449,15 +449,19 @@
    ending, so `;; settled` news never does (§11)."
   [{:keys [code ns await background]} {:keys [peer display session tasks?] ::keys [request]}]
   (let [{:keys [task details baseline bank]} (evaluate/evaluate code ns session)
-        {:keys [id evicted]}
-        (registry/capture! {:task         task
-                            :details      details
-                            :requested-ns ns
-                            :baseline     baseline
-                            :bank         bank
-                            :peer         peer
-                            :session      session
-                            :at           (java.util.Date.)})
+        admitted {:task         task
+                  :details      details
+                  :requested-ns ns
+                  :baseline     baseline
+                  :bank         bank
+                  :peer         peer
+                  :session      session
+                  :at           (java.util.Date.)}
+        {:keys [id evicted]} (registry/capture! admitted)
+        ;; Kept with the call, which is answered from it: the registry may
+        ;; let the entry go before then — its session ended, its result
+        ;; evicted — and the call's own answer is not a lookup.
+        entry    (assoc admitted :id id)
         wait (cond (and tasks? background) 0
                    tasks?                  task-grace
                    :else                   (deadline await await-ms))]
@@ -470,13 +474,13 @@
         ;; A task answer carries no text, so the admission's own losses
         ;; wait for the session's next response like anyone else's.
         (when (seq evicted) (session/note-evictions! session evicted))
-        {::task      (assoc (task-state (registry/entry id)) :resultType "task")
+        {::task      (assoc (task-state entry) :resultType "task")
          ::delivered #(registry/told! [id])})
       ;; Asked before the report is rendered: should the eval settle in
       ;; between, the note errs toward saying how to fetch a result the
       ;; report already shows.
       (let [running? (= :running (registry/status task))]
-        (cond-> (report (registry/entry id) {:session session :evicted evicted})
+        (cond-> (report entry {:session session :evicted evicted})
           (and background (not tasks?))
           (update :text str (background-unapplied id wait running?)))))))
 
