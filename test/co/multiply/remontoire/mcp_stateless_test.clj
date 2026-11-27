@@ -63,6 +63,25 @@
   (get-in (rpc! "tools/list" {} tasks?) [:result :tools]))
 
 
+(defn- entry-of
+  "The registry id a task id names."
+  [task-id]
+  (some-> task-id (str/split #"-") second parse-long))
+
+
+(defn- delivered?
+  "Whether entry `id` comes to be marked delivered, waiting up to five
+   seconds. A cancel marks its entry once the task has settled, after its
+   answer has gone: a test that cancels a running task waits here, or the
+   mark is made after the next test has reset the registry, on whatever
+   holds that id by then."
+  [id]
+  (loop [n 0]
+    (cond (:touched (registry/entry id)) true
+          (< 500 n) false
+          :else (do (Thread/sleep 10) (recur (inc n))))))
+
+
 (deftest the-list-follows-the-requests-declaration
   (let [with    (listed true)
         without (listed false)]
@@ -111,7 +130,7 @@
   (let [sid     (create-session!)
         created (call! "eval" {:code "(Thread/sleep 600) :slow" :session-id sid})
         task-id (get-in created [:result :taskId])
-        entry   (some-> task-id (str/split #"-") second parse-long)]
+        entry   (entry-of task-id)]
     (is (= "task" (get-in created [:result :resultType])))
     (is (= "working" (get-in created [:result :status])))
     (is (str/starts-with? task-id (str sid "-")))
@@ -134,7 +153,8 @@
            task-id (get-in created [:result :taskId])]
        (is (= "task" (get-in created [:result :resultType])))
        (is (< waited 5000) "answered without waiting out the grace")
-       (rpc! "tasks/cancel" {:taskId task-id}))))
+       (rpc! "tasks/cancel" {:taskId task-id})
+       (is (delivered? (entry-of task-id)) "and its cancel has done all it does"))))
 
 
 (deftest background-on-a-call-that-declares-no-tasks-is-said-not-to-apply
@@ -165,7 +185,7 @@
         task-id (get-in (call! "eval" {:code "(Thread/sleep 60000)" :session-id sid})
                   [:result :taskId])]
     (is (= {} (dissoc (:result (rpc! "tasks/cancel" {:taskId task-id})) :resultType :_meta)))
-    (Thread/sleep 200)
+    (is (delivered? (entry-of task-id)))
     (is (= "cancelled" (get-in (rpc! "tasks/get" {:taskId task-id}) [:result :status])))))
 
 
@@ -182,7 +202,7 @@
   (reset! gate (promise))
   (let [task-id (get-in (call! "eval" {:code (str "@@@#'" `gate " :kept") :session-id sid :background true})
                   [:result :taskId])]
-    [task-id (some-> task-id (str/split #"-") second parse-long)]))
+    [task-id (entry-of task-id)]))
 
 
 (defn- collectable?
@@ -226,11 +246,7 @@
     (rpc! "tasks/cancel" {:taskId task-id})
     @(q/await (registry/task entry) 2000)
     (is (= :cancelled (registry/status (registry/task entry))))
-    (is (loop [n 0]
-          (cond (:touched (registry/entry entry)) true
-                (< 100 n) false
-                :else (do (Thread/sleep 10) (recur (inc n)))))
-      "once it has settled: nobody reads a task they killed")))
+    (is (delivered? entry) "once it has settled: nobody reads a task they killed")))
 
 
 (deftest following-a-task-keeps-its-session-live
@@ -238,7 +254,7 @@
         task-id (get-in (call! "eval" {:code "(Thread/sleep 60000)" :session-id sid :background true})
                   [:result :taskId])
         earlier (- (System/currentTimeMillis) 60000)
-        entry   (some-> task-id (str/split #"-") second parse-long)]
+        entry   (entry-of task-id)]
     (try
       (swap! @#'session/state assoc-in [sid :last-seen] earlier)
       (rpc! "tasks/get" {:taskId task-id})
