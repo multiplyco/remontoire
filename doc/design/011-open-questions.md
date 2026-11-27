@@ -17,7 +17,9 @@
   one conversation can span several — which sets two requirements: owner tags on registry entries must outlive their
   session gracefully (the entries stay reachable by id; only the dead session's *delivery* claims lapse), and anything
   owed to a session that will never call again — told-once news, the unread-results eviction shield — needs a
-  liveness notion so it doesn't accumulate as permanent debt.
+  liveness notion so it doesn't accumulate as permanent debt. An entry admitted for a session that has already
+  ended would be such a debt from the start — an eval begun while the session lived and registered after it
+  went — and is admitted with its claim lapsed (2026-11-26).
 
   On that liveness notion, two more measurements (2026-08-04): the client sends **no DELETE** on reconnect — the old
   session is abandoned without the spec's terminating request — so expiry-by-silence (a last-seen stamp per session,

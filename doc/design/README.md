@@ -27,3 +27,4 @@ and comments: **`ยง<n>` refers to the file numbered `<n>` in this directory** โ€
 12. [Build order](012-build-order.md)
 13. [Fixture corpus](013-fixture-corpus.md)
 14. [Conceptual search](014-conceptual-search.md)
+15. [The gateway](015-gateway.md)

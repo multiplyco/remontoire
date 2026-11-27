@@ -27,10 +27,31 @@
     [java.util Base64 Base64$Decoder]))
 
 
-(def ^:private json-content-type "application/json; charset=utf-8")
+(def json-content-type "application/json; charset=utf-8")
 
 
-(def ^:private sse-content-type "text/event-stream; charset=utf-8")
+(def sse-content-type "text/event-stream; charset=utf-8")
+
+
+(def tunnelled-attribute
+  "Set on an exchange that did not arrive on this server's own socket: a
+   follower serving what its gateway sent it (§15)."
+  "co.multiply.remontoire/tunnelled")
+
+
+(def admitted-attribute
+  "Set on a tunnelled exchange whose requests were registered for
+   cancellation before it was handed to a handler: the context
+   `mcp/admit` returned, whose records stay with whoever made them."
+  "co.multiply.remontoire/admitted")
+
+
+(def answers-attribute
+  "Set on a tunnelled exchange ahead of the write that answers its request
+   on an event stream: the one message that carries every response the
+   request is owed. A follower says so with that write, and its gateway
+   counts the request answered by what it is told (§15)."
+  "co.multiply.remontoire/answers")
 
 
 (def ^:private heartbeat-ms
@@ -47,7 +68,7 @@
   1000)
 
 
-(defn- encode
+(defn encode
   "data.json escapes both `/` and every non-ASCII character by default. Both are
    valid JSON and neither is necessary over a UTF-8 body — and a project whose
    premise is that escaping layers eat backslashes should not add a layer of its
@@ -60,7 +81,7 @@
     :key-fn #(if (keyword? %) (subs (str %) 1) (str %))))
 
 
-(defn- header
+(defn header
   [exchange ^String k]
   (Headers/.getFirst (HttpExchange/.getRequestHeaders exchange) k))
 
@@ -105,7 +126,7 @@
       (session/address! sid (str (or (forwarded "X-Forwarded-Proto") "http") "://" host)))))
 
 
-(defn- origin-allowed?
+(defn origin-allowed?
   "Non-browser clients send no Origin at all; browsers always do. So absence is
    the normal case and presence is the one to check. Nothing is allowed by
    default, and no CORS headers are ever emitted — §4's failure mode is an
@@ -239,6 +260,13 @@
               (recur n bank cursor polls' idle'))))))))
 
 
+(defn- announce!
+  "Say, on a tunnelled exchange, that the next write answers its request."
+  [exchange]
+  (when (HttpExchange/.getAttribute exchange tunnelled-attribute)
+    (HttpExchange/.setAttribute exchange answers-attribute true)))
+
+
 (defn- respond-sse!
   "Answer with an SSE stream: headers and a comment immediately — the
    client's per-request timer wants a first byte within 60 s (§5) — then
@@ -274,7 +302,8 @@
                 ;; lands — losing one costs nothing.
                 (or (nil? changed?) (not (changed?))
                   (send! (str "data: " (encode {:jsonrpc "2.0" :method "notifications/tools/list_changed"}) "\n\n")))
-                (send! (str "data: " (encode response) "\n\n"))
+                (do (announce! exchange)
+                  (send! (str "data: " (encode response) "\n\n")))
                 ;; One more frame after the message: a final write can slip
                 ;; into the send buffer of a socket the client already
                 ;; abandoned, and marking on it burned an announcement once
@@ -288,7 +317,7 @@
           response)))))
 
 
-(defn- respond!
+(defn respond!
   [exchange status content-type ^String body]
   (let [bytes (when body (String/.getBytes body StandardCharsets/UTF_8))]
     (when content-type
@@ -372,47 +401,64 @@
 
 
 (defn- serve-modern!
-  "A stateless-wire request (§11): nothing but its own headers to check."
-  [exchange payload peer]
-  (if-let [[code message] (modern-refusal exchange payload)]
-    (respond! exchange 400 json-content-type
-      (encode {:jsonrpc "2.0"
-               :id      (when (map? payload) (:id payload))
-               :error   {:code code :message message}}))
-    (mcp/with-admission {:peer peer :stateless? true} payload
-      #(answer! exchange payload % nil mcp/handle-modern))))
+  "A stateless-wire request (§11), its headers already checked."
+  [exchange payload peer fleet]
+  (mcp/with-admission {:peer peer :stateless? true :fleet fleet} payload
+    #(answer! exchange payload % nil mcp/handle-modern)))
 
 
 (defn- serve-legacy!
   "A legacy-wire request: its connection rides `Mcp-Session-Id`, opened at
    `initialize`, and is what a stale tool list is announced to."
-  [exchange payload peer]
-  (let [cid (connection! exchange payload)]
-    (mcp/with-admission {:peer peer :connection cid} payload
+  [exchange payload peer fleet]
+  (let [cid      (connection! exchange payload)
+        ;; A follower registers what its gateway sends as it arrives, in
+        ;; order, and ahead of this thread (§15).
+        admitted (when cid (HttpExchange/.getAttribute exchange admitted-attribute))]
+    (mcp/with-admission (merge admitted {:peer peer :connection cid :fleet fleet}) payload
       (fn [ctx]
-        (answer! exchange payload ctx (when cid #(mcp/tools-changed? cid)) mcp/handle-payload)))))
+        ;; A tunnelled request's client fetched its tool list from the
+        ;; gateway, which is the one to say when that list is stale (§15).
+        (answer! exchange payload ctx
+          (when (and cid (not (HttpExchange/.getAttribute exchange tunnelled-attribute)))
+            #(mcp/tools-changed? cid))
+          mcp/handle-payload)))))
 
 
 (defn- serve!
   "Parse one POST body and serve it on its wire — stateless when the
    `MCP-Protocol-Version` header names the 2026-07-28 revision, legacy
-   otherwise; both on one endpoint, which the revision blesses (§11)."
-  [exchange]
-  (let [payload (json/read-str (slurp (HttpExchange/.getRequestBody exchange)
-                                 :encoding "UTF-8")
-                  :key-fn keyword)
+   otherwise; both on one endpoint, which the revision blesses (§11).
+   `fleet` is what the instance this door stands on is to a fleet, which
+   every call in the request is served as (§15)."
+  [exchange route fleet]
+  (let [body    (slurp (HttpExchange/.getRequestBody exchange) :encoding "UTF-8")
+        payload (json/read-str body :key-fn keyword)
         ;; getHostString, not getAddress: the string form without a reverse
         ;; DNS lookup. The port is ephemeral and omitted — tailnet addresses
         ;; are stable per device (§4), the host is the identity.
         peer    (InetSocketAddress/.getHostString
-                  (HttpExchange/.getRemoteAddress exchange))]
-    (if (= mcp/protocol-version (header exchange "MCP-Protocol-Version"))
-      (serve-modern! exchange payload peer)
-      (serve-legacy! exchange payload peer))))
+                  (HttpExchange/.getRemoteAddress exchange))
+        modern? (= mcp/protocol-version (header exchange "MCP-Protocol-Version"))
+        ;; Nothing but its own headers to check, and checked before it is
+        ;; routed: what a malformed request is answered does not depend on
+        ;; where it would have gone.
+        refusal (when modern? (modern-refusal exchange payload))]
+    (cond
+      refusal
+      (let [[code message] refusal]
+        (respond! exchange 400 json-content-type
+          (encode {:jsonrpc "2.0"
+                   :id      (when (map? payload) (:id payload))
+                   :error   {:code code :message message}})))
+
+      (and route (route exchange {:kind :mcp :payload payload :body body :modern? modern? :peer peer})) nil
+      modern? (serve-modern! exchange payload peer fleet)
+      :else (serve-legacy! exchange payload peer fleet))))
 
 
 (defn- handle-exchange!
-  [exchange allowed-origins]
+  [exchange {:keys [allowed-origins route fleet]}]
   (try
     (cond
       (not (origin-allowed? exchange allowed-origins))
@@ -433,7 +479,11 @@
       (not= "POST" (HttpExchange/.getRequestMethod exchange))
       (respond! exchange 405 "text/plain" "Method not allowed")
 
-      :else (serve! exchange))
+      ;; The door's instance, not whatever the JVM is by now: a server is
+      ;; started for one instance, and what it accepts is that instance's
+      ;; to the end — through a batch that changes what the JVM is, and
+      ;; past its own stop.
+      :else (serve! exchange route fleet))
     (catch Throwable t
       (respond! exchange 400 json-content-type
         (encode {:jsonrpc "2.0"
@@ -450,7 +500,7 @@
    probes that arrive from several operators, several times a day (§11).
    Same origin policy as `/mcp`; GET only, the whole point being a
    curl-friendly read."
-  [exchange allowed-origins]
+  [exchange {:keys [allowed-origins]}]
   (try
     (cond
       (not (origin-allowed? exchange allowed-origins))
@@ -474,7 +524,7 @@
    and no wider a door: `eval` beside it already writes any file it likes.
    An upload is liveness, like a heartbeat, but never mints the session it
    names."
-  [exchange allowed-origins]
+  [exchange {:keys [allowed-origins route]}]
   (try
     (cond
       (not (origin-allowed? exchange allowed-origins))
@@ -497,6 +547,8 @@
           (respond! exchange 413 "text/plain"
             (str "Larger than the " upload/max-bytes " byte limit\n"))
 
+          (and route (route exchange {:kind :upload :session sid})) nil
+
           :else
           ;; Heard from when the upload arrives and again when it is in:
           ;; its bytes may be a while coming.
@@ -513,45 +565,83 @@
       (HttpExchange/.close exchange))))
 
 
+(defn serve-tunnelled!
+  "Serve an exchange that arrived through a gateway rather than on this
+   server's socket (§15), by the handler its path names — the same
+   handlers, at a `door` of the same origin policy, as a request made
+   directly. The door's `:fleet` is what the instance that took the
+   request off its gateway is to the fleet, for the sessions it opens and
+   the name they are said to be on."
+  [exchange door]
+  (let [path (URI/.getPath (HttpExchange/.getRequestURI exchange))]
+    (cond
+      (str/starts-with? path "/upload/") (handle-upload! exchange door)
+      (str/starts-with? path "/probe") (handle-probe! exchange door)
+      :else (handle-exchange! exchange door))))
+
+
 (defn- handler
   "A shell that delegates through a handler var: the reified instance is
    compiled once at `start!`, and logic inlined in its body is frozen until
    a context swap — a reload that redefines a var it calls through, by
-   contrast, takes effect immediately (learned 2026-08-04)."
-  ^HttpHandler [delegate {:keys [allowed-origins]}]
+   contrast, takes effect immediately (learned 2026-08-04). `door` is what
+   the server it stands on was started with, `{:allowed-origins set,
+   :route fn-or-nil, :fleet hooks-or-nil}`, and goes with every exchange
+   it accepts for as long as one is being served — past the server's own
+   stop."
+  ^HttpHandler [delegate door]
   (reify HttpHandler
     (handle
       [_ exchange]
-      (delegate exchange allowed-origins))))
+      (delegate exchange door))))
 
 
 (defn start!
-  "Bind and start. Returns the HttpServer."
-  ^HttpServer [{:keys [port bind allowed-origins]}]
-  ;; Whatever can fail on its options comes before the port is taken, and
-  ;; nothing comes between taking it and starting: a server that has bound
-  ;; and never started does not give its port back when stopped.
-  (let [opts    {:allowed-origins (set allowed-origins)}
-        mcp     (handler #'handle-exchange! opts)
-        probe   (handler #'handle-probe! opts)
-        upload  (handler #'handle-upload! opts)
-        address (InetSocketAddress. ^String bind (int port))]
-    ;; Asked of a plain socket first, which keeps nothing when it is
-    ;; refused: the JDK's server keeps a descriptor for good when the
-    ;; bind in its constructor fails (measured 2026-11-25).
-    (with-open [asked (ServerSocket.)]
-      (ServerSocket/.bind asked address))
-    (doto (HttpServer/create address 0)
-      (HttpServer/.createContext "/mcp" mcp)
-      (HttpServer/.createContext "/probe" probe)
-      (HttpServer/.createContext "/upload" upload)
-      ;; The default executor runs every exchange serially on the dispatch
-      ;; thread, which deadlocks on the second connection. Quiescent's own
-      ;; executor rather than a fresh virtual one: handler threads then carry
-      ;; the same classloader as every task thread, and a task constructed in
-      ;; a handler is rooted, since the handler is not itself a task.
-      (HttpServer/.setExecutor q.exec/virtual-executor)
-      (HttpServer/.start))))
+  "Bind and start. Returns the HttpServer.
+
+   `wiring` is what this instance's role adds to the transport (§15), and
+   never a host's options. `:route` is a gateway's say over each request
+   before it is served here: called as `(route exchange request)` for each
+   `/mcp` POST — `request` being `{:kind :mcp, :payload parsed, :body
+   text, :modern? bool, :peer host}` — and each upload, `{:kind :upload,
+   :session sid}`, it answers truthy when it has answered the exchange
+   itself, and the request is served here otherwise. `:contexts` are
+   further doors, path → `(fn [exchange door])`. `:fleet` is what the
+   instance is to a fleet (`session/fleet-hooks!`), made before the port
+   opens and given to every request the server accepts: no request finds
+   the endpoint without it, and none is served as an instance the JVM
+   became later."
+  (^HttpServer [opts] (start! opts nil))
+  (^HttpServer [{:keys [port bind allowed-origins]} {:keys [route contexts fleet]}]
+   ;; Everything that can fail on what it was given comes before there is
+   ;; a server, and the server is made bound: one that has bound and never
+   ;; started does not give its port back when stopped, and one made
+   ;; unbound holds a timer thread and descriptors that nothing gives back
+   ;; when its bind then fails.
+   (let [door    {:allowed-origins (set allowed-origins) :route route :fleet fleet}
+         doors   (merge contexts {"/mcp"    #'handle-exchange!
+                                  "/probe"  #'handle-probe!
+                                  "/upload" #'handle-upload!})
+         _       (doseq [[path delegate] doors]
+                   (when-not (and (string? path) (str/starts-with? path "/") (some? delegate))
+                     (throw (IllegalArgumentException. (str "Not a door: " (pr-str path))))))
+         address (InetSocketAddress. ^String bind (int port))
+         ;; Asked of a plain socket first, which keeps nothing when it is
+         ;; refused: the JDK's server keeps a descriptor for good when the
+         ;; bind in its constructor fails (measured 2026-11-25).
+         _       (with-open [probe (ServerSocket.)]
+                   (ServerSocket/.bind probe address))
+         server  (HttpServer/create address 0)]
+     (doseq [[path delegate] doors]
+       (HttpServer/.createContext server path (handler delegate door)))
+     (doto server
+       ;; The default executor runs every exchange serially on the dispatch
+       ;; thread, which deadlocks on the second connection. Quiescent's own
+       ;; executor rather than a fresh virtual one: handler threads then carry
+       ;; the same classloader as every task thread, and a task constructed in
+       ;; a handler is rooted, since the handler is not itself a task.
+       (HttpServer/.setExecutor q.exec/virtual-executor)
+       (HttpServer/.start)))))
 
 
 (defn address

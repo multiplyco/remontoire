@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Gateways.** An instance started with `:gateway? true` is one address for a fleet: other instances attach to it
+  with `:follow "http://host:port"` under a `:name`, by default the hostname, and stay reachable directly as well. On
+  a gateway `create-session` takes a `node`, and a session opened on a node is routed there for its whole life —
+  tool calls, MCP tasks and uploads alike, on either MCP revision. Sessions without a `node` live in the gateway's
+  own JVM, so a gateway with nothing attached behaves as before.
+- In a gateway's sessions, `(__r.gw/nodes)` lists the fleet and `(__r.gw/node "name")` is a task that settles when a
+  node of that name attaches. The gateway's manual and connect-time intro say so; nothing changes on other instances.
+- Followers redial for as long as they run and report their sessions when they attach and every few seconds
+  after, so a gateway can be restarted, or replaced at the same address, without losing them. A node that goes
+  away keeps its sessions, and calls to them are refused with that reason until it is back.
+
 Fixes:
 
 - A start that fails because its port is taken no longer leaves a file descriptor open. Each attempt left one, and a

@@ -22,7 +22,9 @@
    like its sticky namespace, created on demand and gone with the session.
    So is its upload directory, where files a client hands the JVM are
    staged: minted on the first upload, deleted with the session."
-  (:require [co.multiply.remontoire.rewire :as rewire])
+  (:require
+    [co.multiply.remontoire.fleet :as fleet]
+    [co.multiply.remontoire.rewire :as rewire])
   (:import
     [java.nio.file FileVisitResult Files Path SimpleFileVisitor]
     [java.nio.file.attribute FileAttribute]
@@ -75,6 +77,37 @@
 (defonce ^:private scratch-lock (Object.))
 
 
+(defonce ^{:private true
+           :doc     "What an instance in a fleet does about its sessions beyond
+   this JVM (§15): `:claim`, asked of each freshly drawn handle. Empty for
+   an instance alone."}
+  fleet-hooks
+  (atom {}))
+
+
+(defn fleet-hooks!
+  "Install `{:claim (fn [handle take!] → boolean), :name str-or-nil}`, or
+   nil to remove it. `:name` is what the instance goes by among the fleet.
+   `:claim` decides whether the fleet lets this instance have the handle.
+   When it does, it calls `take!`, which makes the session, and answers
+   true; it answers false for a handle that is taken, and throws when no
+   session may be opened at all. `take!` is the hook's to call so that it
+   can be called under whatever the hook holds while it decides: nothing
+   that is said of this instance's sessions then falls between the fleet's
+   word and the session being there."
+  [hooks]
+  (reset! fleet-hooks (or hooks {}))
+  nil)
+
+
+(defn fleet
+  "The hooks installed now (`fleet-hooks!`), empty when nothing runs: what
+   this JVM is to a fleet at this moment, for a mint no request stands
+   behind. A request is given its own by the door it arrived at (`mint!`)."
+  []
+  @fleet-hooks)
+
+
 (defn- handle-length
   "How many letters the next handle gets, `used` having been minted: five,
    and one more each time the length in use is half spent — which at five
@@ -95,15 +128,35 @@
    A collision is therefore only ever with a handle from a previous boot —
    and the space is sparse, so a typo or a stale handle almost always
    names nothing and is refused loudly, where a counter's dense space
-   would land it silently in a neighbour."
+   would land it silently in a neighbour.
+
+   In a fleet the handle is also claimed from it before anyone is given it
+   (§15), and redrawn when the fleet says it is taken. Every draw of one
+   mint asks the fleet the mint began in: a mint is one request to one
+   fleet, and a redraw that asked whoever answers for the JVM by then
+   would be answered for a request that was never made of them.
+
+   `hooks` is what the instance that accepted the request this mint is
+   made for is to a fleet — the transport gives every request those of
+   the endpoint it arrived at — and the mint is made on those terms
+   whatever the JVM has become since: a request is answered by the
+   instance that took it, or fails. Without it, the hooks installed now."
+  ([] (mint! @fleet-hooks))
+  ([{:keys [claim]}]
+   (loop []
+     (let [h        (apply str (repeatedly (handle-length (count @minted)) #(rand-nth handle-letters)))
+           [before] (swap-vals! minted conj h)
+           take!    #(swap! state assoc-in [h :last-seen] (now))]
+       (cond
+         (contains? before h) (recur)
+         (if claim (claim h take!) (do (take!) true)) h
+         :else (recur))))))
+
+
+(defn handles
+  "Every live session's handle."
   []
-  (loop []
-    (let [h        (apply str (repeatedly (handle-length (count @minted)) #(rand-nth handle-letters)))
-          [before] (swap-vals! minted conj h)]
-      (if (contains? before h)
-        (recur)
-        (do (swap! state assoc-in [h :last-seen] (now))
-          h)))))
+  (vec (keys @state)))
 
 
 (defn live?
@@ -193,6 +246,10 @@
                :refer [q qdo qjoin qfor qlet qmerge if-qlet when-qlet]]
       '[co.multiply.remontoire.registry :refer [res evals]]
       '[co.multiply.remontoire.api :as __r])
+    ;; A gateway's sessions also get the fleet under an alias of its own
+    ;; (§15) — absent everywhere else, where there is no fleet to ask about.
+    (when (fleet/gateway?)
+      (require '[co.multiply.remontoire.api.gw :as __r.gw]))
     *ns*))
 
 
@@ -521,28 +578,36 @@
 (defonce ^:private connections (atom {}))
 
 
+(defn- unexpired
+  "`connections` without the ones silent for longer than `expiry-ms` at
+   time `t`."
+  [connections t]
+  (let [cutoff (- t expiry-ms)]
+    (into {} (remove (fn [[_ c]] (< (:last-seen c 0) cutoff))) connections)))
+
+
 (defn connect!
   "A fresh connection id, for the `initialize` response's `Mcp-Session-Id`
    header. Connections silent for longer than `expiry-ms` are forgotten
    here: a client that reconnects abandons its old id without a goodbye
    (measured 2026-08-04), and every reconnect passes this way."
   []
-  (let [cid    (str (UUID/randomUUID))
-        t      (now)
-        cutoff (- t expiry-ms)]
-    (swap! connections
-      (fn [m]
-        (-> (into {} (remove (fn [[_ c]] (< (:last-seen c 0) cutoff))) m)
-          (assoc cid {:last-seen t}))))
+  (let [cid (str (UUID/randomUUID))
+        t   (now)]
+    (swap! connections #(assoc (unexpired % t) cid {:last-seen t}))
     cid))
 
 
 (defn connected!
   "Refresh `cid`'s last-seen stamp, adopting an id never seen — a client
    that outlived a server restart keeps presenting its old one, and all it
-   has lost is a record that refills. Returns `cid`."
+   has lost is a record that refills. An adoption forgets the silent as a
+   fresh id does: an instance reached only through a gateway is never
+   asked for one (§15). Returns `cid`."
   [cid]
-  (swap! connections assoc-in [cid :last-seen] (now))
+  (let [t (now)]
+    (swap! connections
+      #(assoc-in (if (contains? % cid) % (unexpired % t)) [cid :last-seen] t)))
   cid)
 
 

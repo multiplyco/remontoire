@@ -9,6 +9,7 @@
     [clojure.string :as str]
     [co.multiply.quiescent :as q]
     [co.multiply.remontoire.exception :as exception]
+    [co.multiply.remontoire.fleet :as fleet]
     [co.multiply.remontoire.outline :as outline]
     [co.multiply.remontoire.registry :as registry]
     [co.multiply.remontoire.session :as session]
@@ -48,12 +49,22 @@
 
    Output shape:
    the API reference — this namespace's `outline` with full docstrings,
-   publics only, live from the running build (§4)."
+   publics only, live from the running build (§4). On a gateway, the
+   `__r.gw` reference too, under `:gateway`."
   []
   (session/manual-read! (whoami))
   (println (manual-text (:tasks (session/client (whoami)))))
-  (-> (outline/outline 'co.multiply.remontoire.api {:include-docstrings true})
-    (update :vars #(filterv (complement :private) %))))
+  (let [reference (fn [ns-sym]
+                    (-> (outline/outline ns-sym {:include-docstrings true})
+                      (update :vars #(filterv (complement :private) %))))]
+    ;; A gateway's manual is this one and a passage more (§15): what it
+    ;; has besides, never instead.
+    (if (fleet/gateway?)
+      (do (print (slurp (io/resource "co/multiply/remontoire/api/gateway.md")))
+        (flush)
+        (assoc (reference 'co.multiply.remontoire.api)
+          :gateway (reference 'co.multiply.remontoire.api.gw)))
+      (reference 'co.multiply.remontoire.api))))
 
 
 (defn res

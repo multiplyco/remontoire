@@ -123,8 +123,9 @@
   "End session `sid` now: it is dropped, and its claims lapse
    (`lapse-claims!`). The row goes first, as when a session expires, and
    the claims lapse for the one call that took it: a session ended twice
-   is ended once, and what it left behind is not refreshed over what the
-   living read since."
+   — a fleet can ask for the same retirement twice (§15) — is ended once,
+   and what it left behind is not refreshed over what the living read
+   since."
   [sid]
   (when (session/drop! sid)
     (lapse-claims! sid))

@@ -105,8 +105,8 @@
     (registry/release-session! gone)
     (let [b (admit! live :b)]
       (registry/res b)
-      ;; Asked for again: what the session left behind is not made newer
-      ;; than what the living have read since.
+      ;; Asked for again, as a fleet may: what the session left behind is
+      ;; not made newer than what the living have read since.
       (registry/release-session! gone)
       (admit! live :pressure)
       (is (= :b @(registry/res b)) "a result just read outlives one a session that ended left behind")

@@ -581,6 +581,23 @@
              "and each is told how it was addressed, not only the first"))))))
 
 
+(deftest a-batch-is-served-as-the-instance-that-accepted-it
+  ;; Accepted by an instance alone, which gives out a session on nobody's
+  ;; word. Its first call leaves a fleet answering for the JVM's sessions,
+  ;; and one that refuses everything; its second was not asked of them.
+  (let [cid   (initialize!)
+        sid   (create-session! cid)
+        join  "(co.multiply.remontoire.session/fleet-hooks! {:claim (fn [_ _] (throw (ex-info \"refused\" {})))}) :joined"
+        batch [(assoc (call-body sid "eval" {:code join}) :id 1)
+               (assoc (call-body nil "create-session" {}) :id 2)]]
+    (try
+      (let [[joined opened] (first (filter sequential? (stream-messages (send! batch {:cid cid :accept "application/json, text/event-stream"}))))]
+        (is (str/starts-with? (str (text-of joined)) ":joined"))
+        (is (not (get-in opened [:result :isError])) "the session is opened as it would have been when the post arrived")
+        (is (thrown? Exception (session/mint!)) "where a request accepted now is the fleet's to answer"))
+      (finally (session/fleet-hooks! nil)))))
+
+
 (deftest a-batch-narrates-each-call-under-its-own-token
   ;; Three evals on one stream, each printing a line: two attached a
   ;; progress token and one did not.

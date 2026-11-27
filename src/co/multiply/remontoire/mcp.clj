@@ -7,6 +7,7 @@
     [co.multiply.quiescent :as q]
     [co.multiply.remontoire.evaluate :as evaluate]
     [co.multiply.remontoire.exception :as exception]
+    [co.multiply.remontoire.fleet :as fleet]
     ;; Not called from anywhere: loaded so the pattern namespaces exist
     ;; for the drilldown — `(__r/nses "patterns")` is their index.
     [co.multiply.remontoire.patterns]
@@ -95,6 +96,13 @@
     (let [ctx (admit ctx payload)]
       (try (f ctx)
         (finally (dismiss ctx))))))
+
+
+(defn waiting
+  "How many requests in flight here a cancellation notice for request
+   `id`, arriving on `connection`, names."
+  [connection id]
+  (count (get @in-flight [connection id])))
 
 
 (defn- clamp-await
@@ -688,11 +696,20 @@
 (defn- create-session-handler
   "Mint a handle and record what the client said about itself — the first
    call, so the session knows its client's capabilities from birth; they
-   shape the teaching surface, never what a request is sent."
-  [_ {:keys [client]}]
-  (let [sid (session/mint!)]
+   shape the teaching surface, never what a request is sent. Minted as the
+   instance that accepted the request (`:fleet`), which the transport
+   says (§15); as whatever the JVM is now when nothing did."
+  [_ {:keys [client fleet]}]
+  (let [fleet (or fleet (session/fleet))
+        sid   (session/mint! fleet)]
     (session/client! sid client)
-    {:text (str "Session " sid " — pass \"session-id\": \"" sid "\" to every other remontoire tool.\n"
+    ;; In a fleet the answer says where the session landed (§15): a
+    ;; `create-session` that forgot to name a node runs code on the
+    ;; gateway's machine without an error. The name is the one the
+    ;; handle was claimed under, which is where a gateway routes it —
+    ;; not what the JVM calls itself by the time this is written.
+    {:text (str "Session " sid (some->> (:name fleet) pr-str (str " on node "))
+             " — pass \"session-id\": \"" sid "\" to every other remontoire tool.\n"
              "It holds this conversation's scratch namespace, current namespace and unread "
              "results. It expires after a day of silence and does not survive a server "
              "restart; when an id is refused, create a new session.")}))
@@ -705,6 +722,23 @@
                   "conversation's scratch namespace, current namespace and unread results.")
    :inputSchema {:type "object" :properties {}}
    :handler     create-session-handler})
+
+
+(defn- create-session-declaration
+  "`create-session` as a client is listed it. A gateway's takes the node to
+   open the session on (§15); the argument exists nowhere else, and the
+   gateway routes on it before this server's handler ever runs."
+  []
+  (cond-> (dissoc create-session-tool :handler)
+    (fleet/gateway?)
+    (-> (update :description str
+          " This server is a gateway to other machines: `node` opens the session on one of "
+          "them, and the session then lives there.")
+      (assoc-in [:inputSchema :properties :node]
+        {:type        "string"
+         :description (str "The name of an attached node to open the session on. Omit it for "
+                        "this server's own JVM. `(__r.gw/nodes)`, evaluated in a session "
+                        "here, lists them.")}))))
 
 
 (defn- with-session-id
@@ -743,7 +777,7 @@
                     (update-in [:inputSchema :properties] dissoc :await)
                     (assoc-in [:inputSchema :properties :background] background-property))]
                  tools)]
-    (into [(dissoc create-session-tool :handler)]
+    (into [(create-session-declaration)]
       (map (comp #(dissoc % :handler) with-session-id))
       listed)))
 
@@ -806,9 +840,15 @@
    self-description, nil when unset. Consumers key on field presence, not
    shape completeness — fields may accrete here without coordination."
   []
-  {:server   "remontoire"
-   :version  (:version server-info)
-   :describe (:describe @config)})
+  (cond-> {:server   "remontoire"
+           :version  (:version server-info)
+           :describe (:describe @config)}
+    (fleet/role) (assoc :role (name (fleet/role)) :name (fleet/node-name))))
+
+
+(defn version
+  []
+  (:version server-info))
 
 
 (defn- instructions
@@ -845,7 +885,13 @@
     "The file as written? `(__r/file 'some.ns)`. For evaluating code it uses "
     "async semantics: in your first eval, run `(__r/manual)`, unless you've "
     "already read it in this conversation. Call create-session first and "
-    "pass its id as `session-id` to every other tool."))
+    "pass its id as `session-id` to every other tool."
+    ;; Additive, and a gateway's only (§15): everything above holds there
+    ;; too.
+    (when (fleet/gateway?)
+      (str " This server is also a gateway to other machines running Remontoire: "
+        "create-session takes a `node` to open the session on one of them, and "
+        "`(__r.gw/nodes)` lists those attached."))))
 
 
 (defn- content
@@ -903,12 +949,27 @@
     (error id -32602 (str "Unknown tool: " tool-name))))
 
 
+(declare ^:private complete)
+
+
 (defn- refusal
   [sid]
   (if (string? sid)
     (str "Session " (pr-str sid) " is not live on this server — it expired, or was "
       "minted before a restart. Call create-session for a new one.")
     "No `session-id` — call create-session first and pass its id to every other tool."))
+
+
+(defn tool-refusal
+  "The response to `payload` — a request, on the wire `modern?` says — that
+   a tool call would give when it refuses in its own words: an `isError`
+   result for a `tools/call`, a JSON-RPC error for anything else. For a
+   caller that answers a request without dispatching it."
+  [{:keys [id method]} modern? message]
+  (cond-> (if (= "tools/call" method)
+            (result id {:content (text message) :isError true})
+            (error id -32603 message))
+    modern? complete))
 
 
 (defn- call-tool

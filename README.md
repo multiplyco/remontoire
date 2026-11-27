@@ -169,6 +169,9 @@ defaults:
 | `:allowed-origins` | `#{}`         | Browser `Origin` values accepted. Empty refuses every browser (see below).                        |
 | `:capacity`        | `20`          | Settled, delivered registry entries retained; raise if results you reach back for report evicted. |
 | `:describe`        | `nil`         | The server's self-description, woven into the connect-time intro (see below).                     |
+| `:gateway?`        | `false`       | Be the one address a fleet of instances is reached through (see "Many machines, one address").    |
+| `:follow`          | `nil`         | A gateway's base address, `"http://host:port"`, to attach to.                                      |
+| `:name`            | hostname      | What a gateway or follower is called among the fleet.                                             |
 
 `(remontoire/stop!)` releases the endpoint; `(remontoire/status)` reports it; `(remontoire/capacity! n)` adjusts
 retention mid-run.
@@ -191,7 +194,7 @@ upload directory, and the response names where it landed.
 
 ```
 $ curl -T src/app/orders.clj http://127.0.0.1:7888/upload/pbg/
-{"name":"orders.clj","path":"/tmp/remontoire-4411/pbg-9305/orders.clj","size":2114}
+{"name":"orders.clj","path":"/tmp/remontoire-4411/pbgkt-9305/orders.clj","size":2114}
 ```
 
 This is for the agent rather than for you: `(__r/upload-url)` tells it the address, and `(__r/uploads)` lists what is
@@ -225,6 +228,40 @@ Two other scopes matter:
 
 The connect-time intro is delivered when a conversation starts and cached for its duration — a changed `:describe`
 or an upgraded server shows up in the next conversation, not mid-session.
+
+## Many machines, one address
+
+One endpoint is one MCP entry, and an entry is read when the client starts. A fleet of development machines that are
+added, restarted and put to sleep therefore costs a reconfiguration and a reconnect each time it changes. A gateway
+removes that: the client holds one entry, and machines come and go behind it.
+
+```clojure
+;; on the machine every client points at
+(remontoire/init! {:gateway? true :bind "<private address>"})
+
+;; on each of the others
+(remontoire/init! {:follow "http://<gateway address>:7888" :name "build-box"})
+```
+
+A follower attaches to the gateway and keeps attaching: it redials for as long as it runs, so a gateway can be
+restarted and the fleet reassembles in about a second. It also keeps its own endpoint, exactly as without `:follow`,
+so the machine stays reachable directly when the gateway is the thing that is down.
+
+For the agent, a gateway is an ordinary Remontoire with one addition. `create-session` takes a `node`, and a session
+opened on a node lives there: its evals, tasks, scratch namespace and uploads are that machine's. Without `node` the
+session is in the gateway's own JVM. In a session on the gateway, `(__r.gw/nodes)` lists the fleet and
+`(__r.gw/node "build-box")` waits for a machine to attach, which is how an agent starts a machine and then uses its
+REPL. The gateway's manual says all this; a follower's and a lone instance's manuals do not mention it.
+
+- **Names** are how machines are told apart, so they must be unique among the fleet; the default is the hostname. A
+  name in use is refused to a second claimant for as long as its holder answers.
+- **A machine that goes away** — asleep, restarting, off the network — keeps its sessions, and calls to them are
+  refused with that reason until it is back. If its JVM restarted, the refusal says a new session is needed.
+- **The gateway keeps no state of its own.** What it routes by is reported by followers when they attach and every
+  few seconds after.
+- **Versions** need not match across the fleet, and `(__r.gw/nodes)` shows each node's. The tool list a client sees
+  is the gateway's. A follower too far apart from its gateway to speak with it is refused when it attaches, and
+  prints why.
 
 ## Naming servers
 
@@ -265,6 +302,10 @@ The defaults are built for the presumed case — a local dev JVM, a client on th
   *is* the authentication.
 - **The port also takes files.** Whoever can reach `/mcp` can write files into the JVM's temp directory through
   `/upload`. That is no more than `eval` already allows them.
+- **A gateway's port reaches every machine attached to it**, and attaching is as unauthenticated as everything else:
+  whoever can reach a gateway can evaluate on its followers, and can attach under the name of a machine that is away
+  and be sent what was meant for it. Put a gateway only on a network where every follower's own endpoint would be
+  acceptable to expose.
 
 Wiring Remontoire into a deployed system is a deliberate act, and its consequences belong to whoever performs it.
 Nothing here makes a production REPL safe to expose; the design keeps it inert until someone with the authority to open

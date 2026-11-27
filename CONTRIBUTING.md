@@ -4,10 +4,17 @@ Notes for whoever maintains this library. Using it is covered by the [README](RE
 
 ## Running it locally
 
-`bb dev` starts Remontoire's MCP endpoint on `127.0.0.1:7888` and an nREPL server beside it, in a JVM running this
+`bb dev` starts Remontoire's MCP endpoint on `127.0.0.1:7888`, as a gateway (§15), and an nREPL server beside it, in a JVM running this
 checkout's source (`dev/co/multiply/remontoire/dev.clj`). The repo's `.mcp.json` points Claude Code at that endpoint,
 so a session opened in the repo can drive the library it is changing. Requests reach the handlers through vars, so
 reloading a namespace takes effect without a restart.
+
+`bb dev:follower <name> [port] [gateway]` starts a further JVM that attaches to that gateway under `name`, with an endpoint of
+its own on any free port unless one is given, and no nREPL. A gateway with nothing attached behaves as an instance
+alone, so the dev server exercises that claim daily; followers started beside it put both roles, and the direct
+connection to a follower, within reach of one checkout. Session state is per JVM, which is why a gateway and a
+follower are never run in one process — the suite plays the other side of the wire by hand instead (`gateway_test`,
+`follower_test`).
 
 ## A new version arrives in a fresh JVM
 

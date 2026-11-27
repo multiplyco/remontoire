@@ -97,6 +97,15 @@
   (is (= [:decls] (session/fetched-tools "from-before-a-restart"))))
 
 
+(deftest silent-connections-are-forgotten-when-another-is-adopted
+  ;; An instance reached only through a gateway is never asked for a fresh
+  ;; id (§15): the ids it sees are the gateway's, adopted as they arrive.
+  (session/connected! "old")
+  (swap! @#'session/connections assoc-in ["old" :last-seen] 0)
+  (session/connected! "new")
+  (is (= #{"new"} (set (keys @@#'session/connections)))))
+
+
 (deftest silent-connections-are-forgotten-when-another-opens
   (let [old (session/connect!)]
     (session/fetched-tools! old [:decls])
