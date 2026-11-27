@@ -400,6 +400,99 @@
     (is (empty? @waits))))
 
 
+(defn- listed
+  "Who a roster lists and whether each is attached."
+  [roster]
+  (mapv (juxt :name :attached) roster))
+
+
+(deftest a-wait-for-a-change-settles-when-the-fleet-does
+  (let [waiting (gateway/await-change nil)]
+    (is (= ::waiting (deref waiting 100 ::waiting)))
+    (let [node (attach! "n1" ["bcdfg"])
+          seen (deref waiting 2000 nil)]
+      (is (= [["gw" true] ["n1" true]] (listed seen)) "a node attached, and the wait has the fleet with it")
+      (let [waiting (gateway/await-change seen)]
+        (is (= ::waiting (deref waiting 100 ::waiting)) "what was seen is not a change")
+        ((:close node))
+        (let [after (deref waiting 5000 nil)]
+          (is (= [["gw" true] ["n1" false]] (listed after)) "the node went away")
+          (is (= after (deref (gateway/await-change seen) 1000 nil))
+            "and a fleet that is already other than the one seen is told at once")
+          (let [waiting (gateway/await-change after)]
+            (is (= ::waiting (deref waiting 100 ::waiting)))
+            ;; Away longer than a session survives silence.
+            (with-redefs [session/expiry-ms -1]
+              (#'gateway/prune-departed! (run)))
+            (is (= [["gw" true]] (listed (deref waiting 2000 nil))) "the node was forgotten")))))))
+
+
+(deftest a-node-being-heard-from-is-not-a-change
+  (let [node (attach! "n1" [])
+        ;; One that went away with sessions and one that went with none:
+        ;; the first is still listed.
+        kept (attach! "n2" ["bcdfg"])
+        left (attach! "n3" [])]
+    (run! next-event [node kept left])
+    ((:close kept))
+    ((:close left))
+    (gone "n2")
+    (gone "n3")
+    (let [seen    (gateway/roster)
+          waiting (gateway/await-change seen)]
+      (is (= [["gw" true] ["n1" true] ["n2" false]] (listed seen)))
+      (is (= ::waiting (deref waiting 100 ::waiting)) "the fleet just listed is the fleet")
+      (is (= [] (beat "n1" ["cdfgh" "dfghj"])))
+      (is (= 2 (:sessions (second (gateway/roster)))))
+      (is (= ::waiting (deref waiting 200 ::waiting)) "nor is it another for a node's beat, or the sessions it has"))))
+
+
+(deftest a-name-passing-to-another-attachment-is-a-change
+  (let [first-jvm (attach! "n1" [])
+        _         (next-event first-jvm)
+        seen      (gateway/roster)]
+    ((:close first-jvm))
+    (gone "n1")
+    (Thread/sleep 5)
+    (next-event (attach! "n1" []))
+    (let [now (gateway/roster)]
+      (is (= (listed seen) (listed now)) "the same names, attached as before")
+      (is (= (listed now) (listed (deref (gateway/await-change seen) 1000 nil)))
+        "and not the fleet that was seen: the node of that name is another"))))
+
+
+(deftest a-wait-for-a-change-ends-with-its-gateway
+  (let [node    (attach! "n1" [])
+        _       (next-event node)
+        waiting (gateway/await-change nil)]
+    (is (= ::waiting (deref waiting 100 ::waiting)))
+    ;; Its nodes are let go by the stop, which is not a change to tell of,
+    ;; however long the stop takes over the rest.
+    (let [detach! @#'gateway/detach!]
+      (with-redefs-fn {#'gateway/detach! (fn [& args]
+                                           (let [detached (apply detach! args)]
+                                             (Thread/sleep 100)
+                                             detached))}
+        remontoire/stop!))
+    (is (true? @(q/await waiting 2000)))
+    (is (and (some? (q/get-ex waiting)) (not (q/cancelled? waiting))))
+    (is (some? (q/get-ex (gateway/await-change nil))) "as is a wait made on no gateway at all")))
+
+
+(deftest a-finished-wait-for-a-change-is-not-kept
+  (let [waits (:watchers (run))]
+    (is (some? (deref (gateway/await-change [{:name "long-gone" :attached true}]) 1000 nil)))
+    (is (empty? @waits) "a wait for a change already there holds nothing")
+    (let [given-up (gateway/await-change nil)]
+      (q/cancel given-up)
+      (loop [n 0] (when (and (not (realized? given-up)) (< n 100)) (Thread/sleep 10) (recur (inc n)))))
+    (let [waiting (gateway/await-change nil)]
+      (is (= 1 (count @waits)) "a wait that was given up is swept at the next")
+      (next-event (attach! "n1" []))
+      (is (some? (deref waiting 2000 nil)))
+      (is (empty? @waits)))))
+
+
 (deftest a-retired-handle-stays-retired
   (let [a (attach! "n1" ["bcdfg"])
         _ (next-event a)

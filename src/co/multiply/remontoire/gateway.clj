@@ -108,16 +108,33 @@
 ;;          that name attaches. Settled ones are swept at every wait and
 ;;          attach: a wait can also end by being cancelled, which nothing
 ;;          here is told of.
+;; :watchers atom of [{:seen membership, :wait quiescent promise} …], each
+;;          settled with the roster once the fleet is other than the one
+;;          it saw (`membership`). Swept as `:waiters` is, at every wait
+;;          and every telling.
 ;; :pings   atom of nonce → promise, delivered by the pong
+(declare membership tell-change!)
+
+
 (defn- new-run
   [name]
-  {:id      (str (random-uuid))
-   :name    name
-   :lock    (Object.)
-   :state   (atom {:ended? false :nodes {} :departed {} :routes {} :retired #{} :started (System/currentTimeMillis)})
-   :pending (atom {})
-   :waiters (atom {})
-   :pings   (atom {})})
+  (let [run {:id       (str (random-uuid))
+             :name     name
+             :lock     (Object.)
+             :state    (atom {:ended? false :nodes {} :departed {} :routes {} :retired #{} :started (System/currentTimeMillis)})
+             :pending  (atom {})
+             :waiters  (atom {})
+             :watchers (atom [])
+             :pings    (atom {})}]
+    ;; Whatever changes who is in the fleet tells those waiting for a
+    ;; change, wherever it was changed from. On a thread of its own: the
+    ;; state is changed holding the run's lock, and a wait is not settled
+    ;; under it.
+    (add-watch (:state run) ::membership
+      (fn [_ _ before after]
+        (when (not= (membership before) (membership after))
+          (Thread/startVirtualThread #(tell-change! run)))))
+    run))
 
 
 ;; The run this JVM is the gateway of now, nil when it is of none: for
@@ -136,28 +153,29 @@
 (defn- roster-of
   "The fleet as the gateway's run `run` sees it: itself first, then the
    attached nodes, then nodes that went away with sessions still routed to
-   them."
-  [run]
-  (let [{:keys [nodes departed routes]} (some-> run :state deref)
-        counts (frequencies (vals routes))
-        t      (now)
-        ago    #(quot (- t (long %)) 1000)]
-    (-> [{:name     (or (:name run) (fleet/node-name))
-          :gateway  true
-          :attached true
-          :sessions (session/live-count)}]
-      (into (map (fn [[name {:keys [since heard version]}]]
-                   {:name     name
-                    :attached true
-                    :since    (Date. (long since))
-                    :heard-s  (ago (AtomicLong/.get heard))
-                    :version  version
-                    :sessions (get counts name 0)}))
-        (sort-by key nodes))
-      (into (keep (fn [[name heard]]
-                    (when (contains? counts name)
-                      {:name name :attached false :heard-s (ago heard) :sessions (counts name)})))
-        (sort-by key departed)))))
+   them. `state` is the run's, as it was read; the run's own when not
+   given."
+  ([run] (roster-of run (some-> run :state deref)))
+  ([run {:keys [nodes departed routes]}]
+   (let [counts (frequencies (vals routes))
+         t      (now)
+         ago    #(quot (- t (long %)) 1000)]
+     (-> [{:name     (or (:name run) (fleet/node-name))
+           :gateway  true
+           :attached true
+           :sessions (session/live-count)}]
+       (into (map (fn [[name {:keys [since heard version]}]]
+                    {:name     name
+                     :attached true
+                     :since    (Date. (long since))
+                     :heard-s  (ago (AtomicLong/.get heard))
+                     :version  version
+                     :sessions (get counts name 0)}))
+         (sort-by key nodes))
+       (into (keep (fn [[name heard]]
+                     (when (contains? counts name)
+                       {:name name :attached false :heard-s (ago heard) :sessions (counts name)})))
+         (sort-by key departed))))))
 
 
 (defn roster
@@ -203,6 +221,71 @@
           ;; or the run may have ended, its waits already told so.
           (when (:ended? @state)
             (q/fail p (stopped)))))
+      (q/fail p (ex-info "This instance is not a gateway." {})))
+    p))
+
+
+(defn- membership
+  "Who a roster lists beside the gateway, as a run's `state` has it: name
+   → when it attached, in ms, and nil for a node that went away with
+   sessions still routed to it. What a wait for a change compares. Not
+   when a node was last heard from, nor the sessions it has: those move
+   all the time, and a name that passed to another attachment is told
+   apart by when it attached."
+  [{:keys [nodes departed routes]}]
+  (let [routed (set (vals routes))]
+    (-> (into {} (keep (fn [[name _]] (when (routed name) [name nil]))) departed)
+      (into (map (fn [[name {:keys [since]}]] [name since])) nodes))))
+
+
+(defn- membership-seen
+  "`membership`, read back from a roster a caller was given."
+  [roster]
+  (when-not (and (sequential? roster) (every? map? roster))
+    (throw (IllegalArgumentException.
+             "What was seen is a roster: the fleet as it was listed, or as a wait for a change gave it.")))
+  (into {}
+    (comp (remove :gateway)
+      (map (fn [{:keys [name attached since]}]
+             [name (when (and attached (inst? since)) (inst-ms since))])))
+    roster))
+
+
+(defn- tell-change!
+  "Settle, with the roster, every wait for a change that saw another fleet
+   than the one there is now. The roster is of the state the comparison
+   was made on, so no wait is given back the fleet it saw. Nothing is told
+   of a run that has ended: its stop lets every node go, which is no
+   change to its fleet, and tells the waits so."
+  [{:keys [state watchers] :as run}]
+  (let [state (deref state)]
+    (when-not (:ended? state)
+      (let [present  (membership state)
+            waiting? (fn [{:keys [seen wait]}] (and (= present seen) (not (realized? wait))))
+            [before] (swap-vals! watchers #(filterv waiting? %))
+            roster   (roster-of run state)]
+        (doseq [{:keys [seen wait]} before
+                :when (not= present seen)]
+          (wait roster))))))
+
+
+(defn await-change
+  "A task settling with the roster once the fleet is other than `seen`, a
+   roster given earlier — at once when it already is. With nil, other
+   than it is at the call. A change is a node attaching, going away or
+   being forgotten, or its name passing to another attachment
+   (`membership`). It fails when the gateway stops first, as a wait for a
+   node does."
+  [seen]
+  (let [p (q/promise)]
+    (if-let [{:keys [state watchers] :as run} @current]
+      (let [seen (if (nil? seen) (membership @state) (membership-seen seen))]
+        (swap! watchers conj {:seen seen :wait p})
+        ;; It may have changed between the look and the wait,
+        (tell-change! run)
+        ;; or the run may have ended, its waits already told so.
+        (when (:ended? @state)
+          (q/fail p (stopped))))
       (q/fail p (ex-info "This instance is not a gateway." {})))
     p))
 
@@ -934,16 +1017,18 @@
    it: a gateway started again is told them afresh. A request the run's
    transport accepted and has not yet routed is refused when its turn
    comes: never served here, and never carried to a node of a later run.
-   Whoever waits for a node is told the gateway stopped."
+   Whoever waits for a node, or for a change to the fleet, is told the
+   gateway stopped."
   []
   (session/fleet-hooks! nil)
-  (when-let [{:keys [state lock waiters] :as run} (first (reset-vals! current nil))]
+  (when-let [{:keys [state lock waiters watchers] :as run} (first (reset-vals! current nil))]
     ;; First, and under the lock an attach is admitted under: nobody joins
     ;; a run that is ending.
     (locking lock
       (swap! state assoc :ended? true))
     (doseq [[name entry] (:nodes @state)]
       (detach! run name entry))
-    (doseq [p (mapcat val (first (reset-vals! waiters {})))]
+    (doseq [p (concat (mapcat val (first (reset-vals! waiters {})))
+                (map :wait (first (reset-vals! watchers []))))]
       (q/fail p (stopped))))
   nil)

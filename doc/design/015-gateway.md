@@ -155,6 +155,11 @@ Waiting for a node is a task that settles when a follower of that name attaches,
 followed like any long eval, by deadline or as a task the client is notified of (§11). That is what lets an agent
 start a machine and then wait for its REPL.
 
+**Decided: waiting for any change is a function too, and takes what the caller last saw.** An agent that watches
+a fleet looks, acts, and waits, and a change that lands between the look and the wait would otherwise be missed
+and the wait left for the change after it. So the wait is given the roster the caller last had, and settles at
+once when the fleet is already another. No counter is handed out for this: the roster is its own mark.
+
 ## Riding along
 
 - **Uploads.** A follower learns the address a client used from the forwarded `Host`, so `(__r/upload-url)` there
@@ -330,6 +335,15 @@ start a machine and then wait for its REPL.
   of. And a session opened on a follower whose JVM took another name meanwhile was said to be on that name,
   where the gateway routed it to the one asked for. Three beats is what the watch compares against, not when it wakes: it looks
   once a beat, and one that fell asleep on the cadence of an attachment just lost sleeps that beat out first.
+- **A change to the fleet is who is in it.** A wait for a change compares the names a roster lists beside the
+  gateway, whether each is attached, and when it attached, which is what tells a name that passed to another
+  JVM from the node that had it. When a node was last heard from and how many sessions it has are not compared:
+  both move all the time. A node that went away counts for as long as the roster lists it, which is while
+  sessions are routed to it. The wait is told from wherever the run's state changes, by a watch on it, and not
+  from each place that changes it: an attach, a node found gone, a node forgotten for its silence, and a
+  report that takes the last route of a node that is away all pass that way. It settles with the roster of
+  the state the comparison was made on, so that no wait is given back the fleet it saw. A stop lets every node
+  go, which is no change to tell of: the waits are told the gateway stopped, as a wait for a node is.
 - **The startup grace is a refusal, not a hold:** for ten seconds after starting, a handle the gateway knows
   nothing of is answered "not known here yet, try again in a few seconds". Measured between JVMs on one machine,
   followers had reported within about a second.

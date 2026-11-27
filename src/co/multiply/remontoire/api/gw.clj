@@ -34,3 +34,19 @@
    at once when it already is. It fails when the gateway stops first."
   [name]
   (gateway/await-node name))
+
+
+(defn change
+  "Wait for the fleet to change.
+
+   Accepts:
+   seen — optional, the fleet as `nodes` or this function last gave it.
+
+   Output shape:
+   a task settling with the fleet, as `nodes` gives it, once it is other
+   than `seen`: a node has attached, gone away or been forgotten, or
+   another has attached under its name. At once when it already is.
+   Without `seen`, other than it is at the call. It fails when the gateway
+   stops first."
+  ([] (gateway/await-change nil))
+  ([seen] (gateway/await-change seen)))

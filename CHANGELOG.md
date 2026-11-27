@@ -8,7 +8,9 @@
   tool calls, MCP tasks and uploads alike, on either MCP revision. Sessions without a `node` live in the gateway's
   own JVM, so a gateway with nothing attached behaves as before.
 - In a gateway's sessions, `(__r.gw/nodes)` lists the fleet and `(__r.gw/node "name")` is a task that settles when a
-  node of that name attaches. The gateway's manual and connect-time intro say so; nothing changes on other instances.
+  node of that name attaches. `(__r.gw/change seen)` is a task that settles with the fleet once it is other than
+  `seen`, an earlier listing: a node attached, went away or was forgotten, or another machine took its name. The
+  gateway's manual and connect-time intro say so; nothing changes on other instances.
 - Followers redial for as long as they run and report their sessions when they attach and every few seconds
   after, so a gateway can be restarted, or replaced at the same address, without losing them. A node that goes
   away keeps its sessions, and calls to them are refused with that reason until it is back.

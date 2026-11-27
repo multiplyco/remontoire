@@ -251,7 +251,7 @@ For the agent, a gateway is an ordinary Remontoire with one addition. `create-se
 opened on a node lives there: its evals, tasks, scratch namespace and uploads are that machine's. Without `node` the
 session is in the gateway's own JVM. In a session on the gateway, `(__r.gw/nodes)` lists the fleet and
 `(__r.gw/node "build-box")` waits for a machine to attach, which is how an agent starts a machine and then uses its
-REPL. The gateway's manual says all this; a follower's and a lone instance's manuals do not mention it.
+REPL. `(__r.gw/change seen)` waits for the fleet to be other than the one last listed. The gateway's manual says all this; a follower's and a lone instance's manuals do not mention it.
 
 - **Names** are how machines are told apart, so they must be unique among the fleet; the default is the hostname. A
   name in use is refused to a second claimant for as long as its holder answers.
