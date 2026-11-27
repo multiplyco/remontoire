@@ -22,7 +22,7 @@
     [clojure.lang ExceptionInfo]
     [com.sun.net.httpserver Headers HttpExchange HttpHandler HttpServer]
     [java.io IOException OutputStream]
-    [java.net InetSocketAddress URI]
+    [java.net InetSocketAddress ServerSocket URI]
     [java.nio.charset StandardCharsets]
     [java.util Base64 Base64$Decoder]))
 
@@ -531,11 +531,17 @@
   ;; Whatever can fail on its options comes before the port is taken, and
   ;; nothing comes between taking it and starting: a server that has bound
   ;; and never started does not give its port back when stopped.
-  (let [opts   {:allowed-origins (set allowed-origins)}
-        mcp    (handler #'handle-exchange! opts)
-        probe  (handler #'handle-probe! opts)
-        upload (handler #'handle-upload! opts)]
-    (doto (HttpServer/create (InetSocketAddress. ^String bind (int port)) 0)
+  (let [opts    {:allowed-origins (set allowed-origins)}
+        mcp     (handler #'handle-exchange! opts)
+        probe   (handler #'handle-probe! opts)
+        upload  (handler #'handle-upload! opts)
+        address (InetSocketAddress. ^String bind (int port))]
+    ;; Asked of a plain socket first, which keeps nothing when it is
+    ;; refused: the JDK's server keeps a descriptor for good when the
+    ;; bind in its constructor fails (measured 2026-11-25).
+    (with-open [asked (ServerSocket.)]
+      (ServerSocket/.bind asked address))
+    (doto (HttpServer/create address 0)
       (HttpServer/.createContext "/mcp" mcp)
       (HttpServer/.createContext "/probe" probe)
       (HttpServer/.createContext "/upload" upload)

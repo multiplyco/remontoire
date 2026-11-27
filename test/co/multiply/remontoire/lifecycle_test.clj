@@ -9,6 +9,8 @@
     [co.multiply.remontoire.registry :as registry])
   (:import
     [clojure.lang Var]
+    [com.sun.management UnixOperatingSystemMXBean]
+    [java.lang.management ManagementFactory]
     [java.net InetAddress InetSocketAddress ServerSocket URI]
     [java.net.http HttpClient HttpRequest HttpRequest$Builder HttpResponse HttpResponse$BodyHandlers]))
 
@@ -42,6 +44,32 @@
       (try
         (is (= port (get-in (remontoire/init! {:port port}) [:opts :port])) "the same port, asked for properly")
         (finally (remontoire/stop!))))))
+
+
+(deftest a-port-that-is-taken-costs-nothing-to-ask-for
+  (let [timers #(count (filter (fn [thread] (str/includes? (Thread/.getName thread) "idle-timeout"))
+                         (keys (Thread/getAllStackTraces))))
+        os     (ManagementFactory/getOperatingSystemMXBean)
+        ;; Where the JVM can count them.
+        open   #(when (instance? UnixOperatingSystemMXBean os)
+                  (UnixOperatingSystemMXBean/.getOpenFileDescriptorCount os))]
+    ;; Those of servers earlier tests stopped are on their way out.
+    (loop [n 0]
+      (when (and (pos? (timers)) (< n 100))
+        (Thread/sleep 20)
+        (recur (inc n))))
+    (with-open [taken (ServerSocket. 0 1 (InetAddress/getByName "127.0.0.1"))]
+      (let [before (open)]
+        (dotimes [_ 3]
+          (is (thrown? java.io.IOException
+                (remontoire/init! {:port (ServerSocket/.getLocalPort taken)}))))
+        (when before
+          (is (<= (open) before) "nor a descriptor"))))
+    (is (zero? (timers)) "no server is left behind by a start that could not bind")
+    (remontoire/init! {:port 0})
+    (try
+      (is (pos? (timers)) "and the count is of something: a server that starts has its timer")
+      (finally (remontoire/stop!)))))
 
 
 (deftest any-free-port-is-reported-as-the-port-it-got

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixes:
+
+- A start that fails because its port is taken no longer leaves a file descriptor open. Each attempt left one, and a
+  garbage collection did not give it back.
+
 ## 0.10.0 - 2026-11-24
 
 What a client or a host will see differently:
